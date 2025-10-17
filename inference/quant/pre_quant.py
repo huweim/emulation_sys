@@ -51,13 +51,15 @@ def replace_quant_linear(
     q_config: dict,
     use_zero_point: bool = False,
     init_only: bool = False,  # 保留形参以兼容你现在的调用
+    nvfp: bool = False,
     **kwargs,
 ):
-    from .quantizer import QuantLinear
+    if nvfp:
+        from .nvfp_quantizer import QuantLinear
+    else:
+        from .quantizer_init import QuantLinear
 
     layers = get_blocks(model)
-    device = next(model.parameters()).device
-    dtype  = next(model.parameters()).dtype
     group_size = q_config.get("q_group_size", 32)
 
     for i in tqdm(range(len(layers)), desc="replace quant linear...(init_only=%s)" % init_only):
@@ -67,14 +69,12 @@ def replace_quant_linear(
         targets = list(named_linears.items())
 
         for name, lin in targets:
-            # 可选：把构建过程放到 CPU，节省 GPU 峰值
-            lin_cpu = lin.to("cpu")
-            q_linear = QuantLinear(lin_cpu, w_bit, a_bit, group_size=group_size, use_zero_point=use_zero_point)
-            q_linear.to(device=device, dtype=dtype)
+            lin_gpu = lin.to("cuda")
+            q_linear = QuantLinear(lin_gpu, w_bit, a_bit, group_size=group_size, use_zero_point=use_zero_point, mode=q_config["mode"])
 
             set_op_by_name(layer, name, q_linear)
 
             # 释放临时引用
-            del lin_cpu, lin, q_linear
+            del lin_gpu, lin, q_linear
             torch.cuda.empty_cache()
     gc.collect()

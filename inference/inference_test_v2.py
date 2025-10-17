@@ -169,6 +169,7 @@ def main():
     parser.add_argument("--a-bit", type=int, default=4, help="activation bitwidth, e.g., 4 for A4")
     parser.add_argument("--q-group-size", type=int, default=32, help="group size along in_features for weight per-group quant")
     parser.add_argument("--zero-point", action="store_true", help="use asymmetric (with zero-point) quant; default symmetric")
+    parser.add_argument("--nvfp", action="store_true", help="use nvfp quant")
 
     args = parser.parse_args()
 
@@ -191,6 +192,7 @@ def main():
             q_config=q_config,
             use_zero_point=args.zero_point,
             init_only=False,
+            nvfp=args.nvfp,
         )
     if args.tasks:
         run_lm_eval(

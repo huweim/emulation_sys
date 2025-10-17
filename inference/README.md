@@ -3,8 +3,7 @@
 conda create -n llm_inference python=3.12 -y
 conda activate llm_inference
 
-pip install torch==2.7.0 --extra-index-url https://download.pytorch.org/whl/cu128
-pip install vllm==0.9.2
+pip install vllm==0.11.0 --extra-index-url https://download.pytorch.org/whl/cu128
 pip install -e .
 ```
 
@@ -28,6 +27,18 @@ python -m inference.inference_test_v2 \
   --task wikitext \
   --dtype fp16 \
   --batch_size 32
+```
+
+nvfp
+```shell
+python -m inference.inference_test_v2 \
+  --model_path /mnt/model/llama-2-7b-hf \
+  --task wikitext \
+  --dtype fp16 \
+  --batch_size 32 \
+  --quantize \
+  --quant_mode real or pseudo \
+  --nvfp
 ```
 
 TODO: 
