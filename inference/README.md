@@ -4,8 +4,8 @@ conda create -n llm_inference python=3.12 -y
 conda activate llm_inference
 
 pip install torch==2.7.0 --extra-index-url https://download.pytorch.org/whl/cu128
-pip install vllm=0.9.2
-pip install . e
+pip install vllm==0.9.2
+pip install -e .
 ```
 
 ## Run

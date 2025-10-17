@@ -17,4 +17,7 @@ dependencies = [
 ]
 
 [tool.setuptools.packages.find]
-where = ["inference"]
+exclude = ["results*", "scripts*", "examples*"]
+
+[tool.wheel]
+exclude = ["results*", "scripts*", "examples*"]
