@@ -10,7 +10,12 @@ pip install vllm==0.11.0 --extra-index-url https://download.pytorch.org/whl/cu12
 
 pip install -e ./inference
 
+git clone --recursive https://github.com/huweim/emulation_sys
+# install nvfp kernel
+git submodule update --init --recursive
+
 pip install lighteval==0.9.0
+
 ```
 
 ## Run
