@@ -59,6 +59,8 @@ class QuantLinear(nn.Module):
 
     def forward(self, x):
         # x: [*, in_features]
+        original_shape_prefix = x.shape[:-1]
+        
         if self.mode == "pseudo":
             if self.a_bit is not None and self.a_bit < 16:
                 x_q = pseudo_quant.nvfp4_pseudo_quantize(x)
@@ -75,6 +77,9 @@ class QuantLinear(nn.Module):
             output = ops.cutlass_scaled_fp4_mm(
                 x_fp4, self.w_fp4, scale_x_fp4, self.w_scale_fp4, alpha, x.dtype
             )
+
+            # reshape output to original batch shape
+            output = output.view(*original_shape_prefix, self.out_features)
 
             if self.bias is not None:
                 output += self.bias

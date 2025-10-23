@@ -8,8 +8,8 @@ version = "0.2.0"
 description = "Test determinism & quantization for LLMs"
 requires-python = ">=3.10"
 dependencies = [
-  "torch==2.7.0",
-  "transformers==4.52.0",
+  "torch==2.8.0",
+  "transformers==4.56.0",
   "accelerate>=0.32.0,<0.34",
   "lm_eval==0.4.4",
   "datasets<2.19.0",

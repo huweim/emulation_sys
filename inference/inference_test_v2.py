@@ -10,7 +10,10 @@ import torch.nn as nn
 
 from .quant.pre_quant import replace_quant_linear 
 
-def initialize_backend(model_path: str):
+from .lighteval_runner import run_lighteval_evaluation
+
+
+def initialize_backend(model_path: str, dtype: torch.dtype): # Added dtype param
     from transformers import AutoTokenizer, AutoModelForCausalLM
 
     torch.manual_seed(42)
@@ -21,12 +24,13 @@ def initialize_backend(model_path: str):
     tokenizer = AutoTokenizer.from_pretrained(model_path)
     model = AutoModelForCausalLM.from_pretrained(
         model_path,
-        torch_dtype=torch.bfloat16,
+        torch_dtype=dtype, # Use the passed dtype
         device_map="auto"
     )
     model.to(device)
     model.eval()
     return model, tokenizer
+
 
 
 @torch.no_grad()
@@ -42,7 +46,7 @@ def generate(prompt: str, model, tokenizer, max_new_tokens=512, do_sample=False)
 
 def run_lm_eval(args, model, tokenizer, tasks: str, batch_size: int, num_fewshot: int, limit: int | None):
     """
-    tasks 例如: "arc_easy,hellaswag,winogrande"
+    tasks e.g.: "arc_easy,hellaswag,winogrande"
     """
     from lm_eval import evaluator
     from lm_eval.models.huggingface import HFLM
@@ -57,7 +61,6 @@ def run_lm_eval(args, model, tokenizer, tasks: str, batch_size: int, num_fewshot
         testenc = testenc.input_ids.to(model.device)
         nsamples = testenc.numel() // model.seqlen
         # nsamples = 10
-        # nsamples = 30
         model = model.eval()
         nlls = []
         for i in tqdm(range(nsamples), desc="evaluating..."):
@@ -92,16 +95,17 @@ def run_lm_eval(args, model, tokenizer, tasks: str, batch_size: int, num_fewshot
             tasks=task_list,
             batch_size=batch_size,
             num_fewshot=num_fewshot,
-            limit=limit,              # 可为 None：全量评测；或设一个整数快速跑
+            limit=limit,               # Can be None: full eval; or set an int for quick run
         )
 
         print(make_table(results))
-        # 也把结构化结果返回（你想存 JSON 也方便）
+        # Also return structured results (convenient for saving to JSON)
         return results
 
 def summarize_results(num_runs: int, baseline_output: str, inconsistencies: dict):
     """
-    打印最终的实验结果总结。
+    (This function is preserved as requested)
+    Prints the final summary of the experiment.
     """
     inconsistent_runs_count = sum(len(runs) for runs in inconsistencies.values())
     consistent_runs_count = num_runs - inconsistent_runs_count
@@ -116,7 +120,7 @@ def summarize_results(num_runs: int, baseline_output: str, inconsistencies: dict
     print("-" * 80)
 
     print("--- Baseline Output (Generated in Run 1) ---")
-    # 使用 textwrap.indent 美化输出
+    # Use textwrap.indent for nice formatting
     indented_baseline = textwrap.indent(baseline_output, '    ')
     print(indented_baseline)
     print("-" * 80)
@@ -137,17 +141,20 @@ def main():
     parser = argparse.ArgumentParser(description="Advanced LLM Inference Determinism Test Script")
     parser.add_argument("--model_path", type=str, default="/mnt/model/llama-2-7b-hf")
     parser.add_argument("--dtype", type=str, default="bf16", choices=["bf16", "fp16", "fp32"])
-    parser.add_argument("--max_new_tokens", type=int, default=512)
+    parser.add_argument("--max_new_tokens", type=int, default=512, help="Max tokens for prompt generation")
     parser.add_argument("--seed", type=int, default=42)
 
-    # 两种使用方式：prompt 或 tasks（二选一或都给；给了 tasks 就跑评测，其它情况下仅做生成）
-    parser.add_argument("--tasks", type=str, default=None, help='Comma-separated task names for lm-eval, e.g. "arc_easy,hellaswag"')
-    parser.add_argument("--batch_size", type=int, default=16)
-    parser.add_argument("--num_fewshot", type=int, default=0)
-    parser.add_argument("--limit", type=int, default=None, help="lm-eval limit per task for quick tests")
+    # --- Eval flags ---
+    parser.add_argument("--tasks", type=str, default=None, help='Task name(s) for evaluation (e.g., "AIME-90" or "arc_easy,hellaswag")')
+    parser.add_argument("--eval_lib", type=str, default="lm-eval", choices=["lm-eval", "lighteval"],
+                        help="Evaluation library to use. 'lighteval' handles custom reasoning tasks.")
+    parser.add_argument("--batch_size", type=int, default=1, help="Evaluation batch size (default: 1)") # Changed default to 1
+    parser.add_argument("--num_fewshot", type=int, default=0, help="Number of few-shot examples")
+    parser.add_argument("--limit", type=int, default=100, help="Limit eval samples (0 for no limit)") # Changed default
 
-    parser.add_argument("--use_prompt", action="store_true", help="generate based on single prompt (if no tasks specified, default False)")
-    parser.add_argument("--num-runs", type=int, default=1, help="Number of inference runs to perform.")
+    # --- Prompting flags ---
+    parser.add_argument("--use_prompt", action="store_true", help="Generate based on single prompt (if no tasks specified, default False)")
+    parser.add_argument("--num-runs", type=int, default=1, help="Number of inference runs for determinism test")
     parser.add_argument("--prompt", type=str, default=(
         "You are a supply chain analyst for a company that manufactures high-end electric bicycles. "
         "A critical shipment of lithium-ion battery packs, originating from a supplier in South Korea, "
@@ -163,8 +170,8 @@ def main():
     ))
     # === quantization flags ===
     parser.add_argument("--quantize", action="store_true", help="wrap Linear with fake-quant QuantLinear")
-    parser.add_argument("--quant-mode", type=str, default="pseudo", choices=["pseudo", "real"],
-                        help="Use 'pseudo' (fake-quant + F.linear) or 'real' (int GEMM API placeholder)")
+    parser.add_argument("--quant-mode", type=str, default="pseudo", choices=["pseudo", "real", "emulation"],
+                        help="Use 'pseudo' (fake-quant + F.linear), 'real' (int GEMM API), or 'emulation' (our simulator)")
     parser.add_argument("--w-bit", type=int, default=4, help="weight bitwidth, e.g., 4 for W4")
     parser.add_argument("--a-bit", type=int, default=4, help="activation bitwidth, e.g., 4 for A4")
     parser.add_argument("--q-group-size", type=int, default=32, help="group size along in_features for weight per-group quant")
@@ -173,17 +180,19 @@ def main():
 
     args = parser.parse_args()
 
-    # 1) load once
-    model, tokenizer = initialize_backend(args.model_path)
+    # --- 1) Load model and tokenizer ---
+    model_dtype = torch.bfloat16 if args.dtype == 'bf16' else (torch.float16 if args.dtype == 'fp16' else torch.float32)
+    model, tokenizer = initialize_backend(args.model_path, model_dtype)
 
-    # 2) (可选) 量化替换
+    # --- 2) (Optional) Apply Quantization ---
+    # The `model` object is modified in-place
     if args.quantize:
         if args.w_bit is None:
             raise ValueError("--quantize is set but --w-bit is None")
-        # a_bit 可以为 None（只做 W 伪量化）
+        # a_bit can be None (for weight-only quant) 
         q_config = {
             "q_group_size": args.q_group_size,
-            "mode": args.quant_mode,   # ★ 新增：把运行模式传进去
+            "mode": args.quant_mode,   # Pass the run mode in
         }
         replace_quant_linear(
             model=model,
@@ -194,25 +203,45 @@ def main():
             init_only=False,
             nvfp=args.nvfp,
         )
-    if args.tasks:
-        run_lm_eval(
-            args=args,
-            model=model,
-            tokenizer=tokenizer,
-            tasks=args.tasks,
-            batch_size=args.batch_size,
-            num_fewshot=args.num_fewshot,
-            limit=args.limit,
-        )
-        # 3B) 仍然支持直接单条 prompt 生成（可单独用，也可在评测后顺手来一条）
-    if args.use_prompt:
-        print("\n" + "=" * 80)
-        print("[Single Generation]")
-        out = generate(args.prompt, model, tokenizer, max_new_tokens=args.max_new_tokens, do_sample=False)
-        print(out)
-        print("=" * 80)
+        print("[Main] Quantization applied.")
+    else:
+        print("[Main] Running full precision (no quantization).")
 
-        # 3) determinism test
+    if args.tasks:
+        if args.eval_lib == "lighteval":
+            print(f"[Main] Using 'lighteval' for task: {args.tasks}")
+            # --- This is the new, correct call to the refactored library ---
+            run_lighteval_evaluation(
+                model=model,
+                model_path=args.model_path,
+                task_name=args.tasks,
+                limit=args.limit if args.limit > 0 else None,
+                num_fewshot=args.num_fewshot,
+                batch_size=args.batch_size
+            )
+            ## vllm backend
+            # from .eval.inference import main as lighteval_main
+            # lighteval_main(args.model_path, args.tasks)
+        else:
+            # lm-eval path
+            print(f"[Main] Using legacy 'lm-eval' library for tasks: {args.tasks}")
+            run_lm_eval(
+                args=args,
+                model=model,
+                tokenizer=tokenizer,
+                tasks=args.tasks,
+                batch_size=args.batch_size,
+                num_fewshot=args.num_fewshot,
+                limit=args.limit if args.limit > 0 else None,
+            )
+    # --- 4) (Optional) Run Prompting / Determinism Test ---
+    if args.use_prompt:
+        # print("\n" + "=" * 80)
+        # print("[Single Generation]")
+        # out = generate(args.prompt, model, tokenizer, max_new_tokens=args.max_new_tokens, do_sample=False)
+        # print(out)
+        # print("=" * 80)
+
         baseline_output = None
         inconsistencies = defaultdict(list)
         print("\n" + "="*80)
@@ -230,8 +259,9 @@ def main():
         #             inconsistencies[current_output].append(i)
         #             mismatch += 1
         #     print(f"Total Mismatch Count: {mismatch}")
-            print(current_output)
+            print('OUTPUT:', current_output)
 
+        # TODO: compare outputs and summarize
         # summarize_results(args.num_runs, baseline_output, inconsistencies)
 
 

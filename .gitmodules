@@ -1,0 +1,3 @@
+[submodule "inference/quant/nvfp_kernel"]
+	path = inference/quant/nvfp_kernel
+	url = https://github.com/SubSir/nvfp_kernel
