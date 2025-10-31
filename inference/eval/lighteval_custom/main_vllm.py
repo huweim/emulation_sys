@@ -19,16 +19,11 @@
 # LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
-import os
 from typing import Optional
 
 from typer import Argument, Option
 from typing_extensions import Annotated
-from lighteval_custom.models.vllm.vllm_model import VLLMModelConfig
 
-
-TOKEN = os.getenv("HF_TOKEN")
-CACHE_DIR: str = os.getenv("HF_HOME", "/scratch")
 
 HELP_PANEL_NAME_1 = "Common Parameters"
 HELP_PANEL_NAME_2 = "Logging Parameters"
@@ -38,13 +33,14 @@ HELP_PANEL_NAME_4 = "Modeling Parameters"
 
 def vllm(
     # === general ===
-    model_config: Annotated[
-        VLLMModelConfig,
+    model_args: Annotated[
+        str,
         Argument(
-            help="Model and generation arguments"
+            help="Model arguments in the form key1=value1,key2=value2,... or path to yaml config file (see examples/model_configs/transformers_model.yaml)"
         ),
     ],
     tasks: Annotated[str, Argument(help="Comma-separated list of tasks to evaluate on.")],
+    model_path_config: str = None,
     # === Common parameters ===
     use_chat_template: Annotated[
         bool, Option(help="Use chat template for evaluation.", rich_help_panel=HELP_PANEL_NAME_4)
@@ -52,23 +48,20 @@ def vllm(
     system_prompt: Annotated[
         Optional[str], Option(help="Use system prompt for evaluation.", rich_help_panel=HELP_PANEL_NAME_4)
     ] = None,
+    cot_prompt: Annotated[
+        Optional[str], Option(help="Use chain of thought prompt for evaluation.", rich_help_panel=HELP_PANEL_NAME_4)
+    ] = None,
     dataset_loading_processes: Annotated[
         int, Option(help="Number of processes to use for dataset loading.", rich_help_panel=HELP_PANEL_NAME_1)
     ] = 1,
     custom_tasks: Annotated[
         Optional[str], Option(help="Path to custom tasks directory.", rich_help_panel=HELP_PANEL_NAME_1)
     ] = None,
-    cache_dir: Annotated[
-        str, Option(help="Cache directory for datasets and models.", rich_help_panel=HELP_PANEL_NAME_1)
-    ] = CACHE_DIR,
     num_fewshot_seeds: Annotated[
         int, Option(help="Number of seeds to use for few-shot evaluation.", rich_help_panel=HELP_PANEL_NAME_1)
     ] = 1,
     load_responses_from_details_date_id: Annotated[
         Optional[str], Option(help="Load responses from details directory.", rich_help_panel=HELP_PANEL_NAME_1)
-    ] = None,
-    load_responses_from_json_file: Annotated[
-        Optional[str], Option(help="Load responses from json file.", rich_help_panel=HELP_PANEL_NAME_1)
     ] = None,
     # === saving ===
     output_dir: Annotated[
@@ -89,6 +82,13 @@ def vllm(
     save_details: Annotated[
         bool, Option(help="Save detailed, sample per sample, results.", rich_help_panel=HELP_PANEL_NAME_2)
     ] = False,
+    wandb: Annotated[
+        bool,
+        Option(
+            help="Push results to wandb. This will only work if you have wandb installed and logged in. We use env variable to configure wandb. see here: https://docs.wandb.ai/guides/track/environment-variables/",
+            rich_help_panel=HELP_PANEL_NAME_2,
+        ),
+    ] = False,
     # === debug ===
     max_samples: Annotated[
         Optional[int], Option(help="Maximum number of samples to evaluate on.", rich_help_panel=HELP_PANEL_NAME_3)
@@ -100,12 +100,11 @@ def vllm(
     """
     Evaluate models using vllm as backend.
     """
+    import yaml
+
     from lighteval.logging.evaluation_tracker import EvaluationTracker
-    from lighteval_custom.pipeline import EnvConfig, ParallelismManager, Pipeline, PipelineParameters
-
-    TOKEN = os.getenv("HF_TOKEN")
-
-    env_config = EnvConfig(token=TOKEN, cache_dir=cache_dir)
+    from lighteval_custom.models.vllm.vllm_model import VLLMModelConfig
+    from lighteval_custom.pipeline import ParallelismManager, Pipeline, PipelineParameters
 
     evaluation_tracker = EvaluationTracker(
         output_dir=output_dir,
@@ -114,29 +113,41 @@ def vllm(
         push_to_tensorboard=push_to_tensorboard,
         public=public_run,
         hub_results_org=results_org,
+        wandb=wandb,
     )
 
     pipeline_params = PipelineParameters(
         launcher_type=ParallelismManager.VLLM,
-        env_config=env_config,
         job_id=job_id,
         dataset_loading_processes=dataset_loading_processes,
         custom_tasks_directory=custom_tasks,
-        override_batch_size=-1,  # Cannot override batch size when using VLLM
         num_fewshot_seeds=num_fewshot_seeds,
         max_samples=max_samples,
         use_chat_template=use_chat_template,
         system_prompt=system_prompt,
+        cot_prompt=cot_prompt,
         load_responses_from_details_date_id=load_responses_from_details_date_id,
-        load_responses_from_json_file=load_responses_from_json_file,
     )
+
+    if model_args.endswith(".yaml"):
+        with open(model_args, "r") as f:
+            metric_options = yaml.safe_load(f).get("metric_options", {})
+        model_config = VLLMModelConfig.from_path(model_args)
+    else:
+        metric_options = {}
+        model_config = VLLMModelConfig.from_args(model_args)
+
+    if model_path_config:
+        print(f"[main_vllm] Overriding config's model_name with: {model_path_config}")
+        model_config.model_name = model_path_config
+
 
     pipeline = Pipeline(
         tasks=tasks,
         pipeline_parameters=pipeline_params,
         evaluation_tracker=evaluation_tracker,
         model_config=model_config,
-        metric_options={},
+        metric_options=metric_options,
     )
 
     pipeline.evaluate()
@@ -145,6 +156,6 @@ def vllm(
 
     results = pipeline.get_results()
 
-    # pipeline.save_and_push_results()
+    pipeline.save_and_push_results()
 
-    return results, evaluation_tracker.details
+    return results

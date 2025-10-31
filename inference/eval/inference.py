@@ -12,59 +12,20 @@ from lighteval.models.model_input  import GenerationParameters
 from lighteval_custom.models.vllm.vllm_model  import VLLMModelConfig
 from lighteval_custom.main_vllm  import vllm
 
-# ========== 固定参数（原 argparse 的默认值） ==========
-DEBUG                 = False
-OVERWRITE             = False
-LOAD_RESPONSES_JSON   = None          # 不从外部文件加载 response
+MODELS_ARGS = [
+    {
+        "model_name": "examples/model_configs/vllm_model_config.yaml",
+        "results_file": "tests/reference_scores/SmolLM2-1.7B-Instruct-results-vllm.json",
+    }
+]
 
-DTYPE                 = 'bfloat16'    # 若模型路径含 "gptqmodel" 会被强制改为 float16
-MAX_SAMPLES           = None          # 不限制样本数（debug 时会强制改 2）
-TEMPERATURE           = 0.6
-TOP_P                 = 0.95
-SEED                  = 42
-MAX_NEW_TOKENS        = 32768
-MAX_MODEL_LENGTH      = 32768
+MAX_SAMPLES = 5
+# MAX_SAMPLES = None
 
-# ========== 根据上面参数派生出的变量 ==========
+def main(model_path_vllm='/localssd/models/DeepSeek-R1-Distill-Qwen-1.5B', task="AIME-90"
+):
 
-TENSOR_PARALLEL_SIZE  = torch.cuda.device_count() 
-
-
-
-# ========== main ==========
-def main(model_path='/localssd/models/DeepSeek-R1-Distill-Qwen-1.5B', task="AIME-90"):
-
-    # gptqmodel 强制 float16
-    if "gptqmodel" in model_path:
-        global DTYPE
-        DTYPE = "float16"
-        
-    random.seed(SEED) 
     os.environ["VLLM_WORKER_MULTIPROC_METHOD"]  = "spawn"
-
-    effective_max_new_tokens = MAX_NEW_TOKENS
-    effective_max_samples   = MAX_SAMPLES
-
-    generation_parameters = GenerationParameters(
-        temperature=TEMPERATURE,
-        top_p=TOP_P,
-        top_k=30 if "QwQ" in model_path else None,
-        max_new_tokens=effective_max_new_tokens,
-        seed=SEED,
-    )
-
-    model_config = VLLMModelConfig(
-        pretrained=model_path,
-        dtype=DTYPE,
-        max_model_length=MAX_MODEL_LENGTH,
-        tensor_parallel_size=TENSOR_PARALLEL_SIZE,
-        gpu_memory_utilization=0.9,
-        enforce_eager=True,
-        enable_prefix_caching=False,
-        enable_chunked_prefill=False,
-        generation_parameters=generation_parameters,
-        init_model=(LOAD_RESPONSES_JSON is None),
-    )
 
     # mapping from dataset string to lighteval task spec
     # The task string format is: "suite|task_name|num_fewshot|version"
@@ -80,14 +41,21 @@ def main(model_path='/localssd/models/DeepSeek-R1-Distill-Qwen-1.5B', task="AIME
                            "lighteval_custom.tasks.livecodebench"), 
     }
 
+    effective_max_samples = MAX_SAMPLES
+
     tasks_str, custom_tasks_path = task_map[task]
+
+    model_name = '/home/wmhu/emulation_workspace/numerical_emulation_system/inference/eval/lighteval_custom/model_configs/vllm_model_config.yaml'
+
     vllm(
-        model_config=model_config,
+        # model_config=model_config,
+        model_args=model_name,
         use_chat_template=True,
         max_samples=effective_max_samples,
-        load_responses_from_json_file=LOAD_RESPONSES_JSON,
+        # load_responses_from_json_file=LOAD_RESPONSES_JSON,
         tasks=tasks_str,
         custom_tasks=custom_tasks_path,
+        model_path_config=model_path_vllm,
     )
 
 if __name__ == "__main__":

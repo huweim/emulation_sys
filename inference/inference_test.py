@@ -130,6 +130,13 @@ def main():
 
     # 1. 初始化，只加载一次模型
     model, tokenizer, sampling_params = initialize_backend(args.backend, args.model_path)
+
+    # Warm-up run for vLLM to JIT kernels
+    if args.backend == 'vllm':
+        print("\n" + "="*80)
+        print("--- Performing 1 warm-up run (vLLM) to JIT kernels... ---")
+        _ = generate(args.backend, "Warm-up run", model, tokenizer, sampling_params)
+        print("--- Warm-up complete. Starting determinism test. ---")
     
     baseline_output = None
     # 使用 defaultdict(list) 更方便地收集不一致的轮次
