@@ -177,4 +177,4 @@ __pycache__
 *.sass
 bin/
 output/
-result/
+results/
