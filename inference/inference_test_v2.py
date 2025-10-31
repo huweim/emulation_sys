@@ -10,6 +10,7 @@ import torch.nn as nn
 
 from transformers import AutoConfig
 
+from lighteval_custom import patch
 from .utils.vllm_utils import prepare_vllm_temp_model
 
 from .quant.pre_quant import replace_quant_linear 

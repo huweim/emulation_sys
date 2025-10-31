@@ -103,8 +103,8 @@ def vllm(
     import yaml
 
     from lighteval.logging.evaluation_tracker import EvaluationTracker
-    from lighteval_custom.models.vllm.vllm_model import VLLMModelConfig
-    from lighteval_custom.pipeline import ParallelismManager, Pipeline, PipelineParameters
+    from lighteval.models.vllm.vllm_model import VLLMModelConfig
+    from lighteval.pipeline import ParallelismManager, Pipeline, PipelineParameters
 
     evaluation_tracker = EvaluationTracker(
         output_dir=output_dir,

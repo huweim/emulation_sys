@@ -1,15 +1,6 @@
 import os
-import json
-import random
-from tqdm import tqdm
 
-import torch
-import transformers
-from vllm import LLM
-from vllm.engine.arg_utils  import PoolerConfig
-
-from lighteval.models.model_input  import GenerationParameters
-from lighteval_custom.models.vllm.vllm_model  import VLLMModelConfig
+from lighteval_custom import patch
 from lighteval_custom.main_vllm  import vllm
 
 MODELS_ARGS = [

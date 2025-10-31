@@ -16,7 +16,7 @@
 
 import random
 
-from lighteval_custom.metrics.dynamic_metrics import (
+from lighteval.metrics.dynamic_metrics import (
     ExprExtractionConfig,
     IndicesExtractionConfig,
     LatexExtractionConfig,
