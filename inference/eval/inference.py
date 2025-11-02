@@ -10,8 +10,8 @@ MODELS_ARGS = [
     }
 ]
 
-MAX_SAMPLES = 5
-# MAX_SAMPLES = None
+# MAX_SAMPLES = 5
+MAX_SAMPLES = None
 
 def main(model_path_vllm='/localssd/models/DeepSeek-R1-Distill-Qwen-1.5B', task="AIME-90"
 ):

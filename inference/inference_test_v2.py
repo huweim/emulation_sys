@@ -59,7 +59,7 @@ def main():
     parser.add_argument("--backend", type=str, default="hf", choices=["hf", "vllm"], help="Specify the conceptual backend (hf required for quantization tests)")
     parser.add_argument("--batch_size", type=int, default=1, help="Evaluation batch size (default: 1)") # Changed default to 1
     parser.add_argument("--num_fewshot", type=int, default=0, help="Number of few-shot examples")
-    parser.add_argument("--limit", type=int, default=100, help="Limit eval samples (0 for no limit)") # Changed default
+    parser.add_argument("--limit", type=int, default=0, help="Limit eval samples (0 for no limit)") # Changed default
 
     # --- Prompting flags ---
     parser.add_argument("--use_prompt", action="store_true", help="Generate based on single prompt (if no tasks specified, default False)")
