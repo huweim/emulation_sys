@@ -460,7 +460,7 @@ class Qwen2ForCausalLM_nvfp(nn.Module, SupportsLoRA, SupportsPP, SupportsEagle3)
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = ""):
         super().__init__()
 
-        vllm_config.quant_config = NVFPQuantConfig()
+        # vllm_config.quant_config = NVFPQuantConfig()
         config = vllm_config.model_config.hf_config
         quant_config = vllm_config.quant_config
         lora_config = vllm_config.lora_config

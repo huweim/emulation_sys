@@ -13,12 +13,7 @@ from vllm.model_executor.layers.quantization.base_config import (
     QuantizationConfig,
 )
 
-# --- [NEW] Direct imports for computation ---
-# We no longer import QuantLinear from nvfp_quantizer.
-# Instead, we import the ops it uses.
-# Ensure 'nvfp' package is in your PYTHONPATH for the vLLM process.
-import nvfp.ops as ops
-import nvfp.pseudo_quant as pseudo_quant
+from inference.quant.nvfp_quantizer import QuantLinear
 
 
 class NVFPvLLMMethod(UnquantizedLinearMethod):
@@ -37,86 +32,33 @@ class NVFPvLLMMethod(UnquantizedLinearMethod):
         super().__init__()
         self.cfg = quant_config # Store the config
 
-        # Define constants for 'real' mode, copied from nvfp_quantizer.py
-        self.FLOAT4_E2M1_MAX = 6.0
-        self.FLOAT8_E4M3_MAX = 448.0
-
     def apply(
         self,
         layer: torch.nn.Module, # This is the vLLM layer (e.g., QKVParallelLinear)
         x: torch.Tensor,
         bias: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        
-        # Get the original weight from the vLLM layer
-        # Note: vLLM layers (e.g., QKVParallelLinear) typically have
-        # weight shape [In_features, Out_features_tp]
-        weight = layer.weight
-        
-        # 1. Select mode from config
-        mode = self.cfg.quant_mode
+        # 1. On the first call, Linear → NVFP_Linear
+        if not hasattr(layer, "_nvfp_linear"):
+            # layer.weight -> [out, in]
+            layer.in_features = layer.weight.shape[1]
+            layer.out_features = layer.weight.shape[0]
 
-        mode = 'real'
-
-        if mode == "pseudo":
-            # --- 'pseudo' mode logic ---
-            # Replicates QuantLinear.forward(mode="pseudo")
-
-            # 1a. Pseudo-quantize weight
-            # This must be done on every forward pass, as torch.compile
-            # cannot easily cache the result of this operation.
-            Wq = pseudo_quant.nvfp4_pseudo_quantize(weight).to(weight.dtype)
-
-            # 1b. Pseudo-quantize activation
-            if self.cfg.a_bit is not None and self.cfg.a_bit < 16:
-                x_q = pseudo_quant.nvfp4_pseudo_quantize(x)
-            else:
-                x_q = x
-
-            # 1c. Perform computation.
-            # vLLM layers use x @ W (not F.linear which is x @ W.T)
-            # x shape: [..., In_features]
-            # Wq shape (from vLLM layer): [In_features, Out_features_tp]
-            output = torch.matmul(x_q.to(Wq.dtype), Wq.T).to(x.dtype)
-
-
-        elif mode == "real":
-            # --- 'real' mode logic ---
-            # Replicates QuantLinear.forward(mode="real")
-            
-            # 2a. Quantize activations
-            # Add epsilon to prevent division by zero if x_amax is 0
-            x_amax = torch.abs(x).max().to(torch.float32)
-            x_global_scale = (self.FLOAT8_E4M3_MAX * self.FLOAT4_E2M1_MAX) / (x_amax + 1e-6)
-            x_fp4, scale_x_fp4 = ops.scaled_fp4_quant(x, x_global_scale)
-
-            # 2b. Quantize weights (also done on every pass for torch.compile)
-            w_amax = torch.abs(weight).max().to(torch.float32)
-            w_global_scale = (self.FLOAT8_E4M3_MAX * self.FLOAT4_E2M1_MAX) / (w_amax + 1e-6)
-            w_fp4, scale_w_fp4 = ops.scaled_fp4_quant(weight, w_global_scale)
-            
-            # 2c. Calculate alpha
-            alpha = 1.0 / (x_global_scale * w_global_scale)
-
-            # 2d. Perform computation
-            # x_fp4 shape: [..., K(In)]
-            # w_fp4 shape: [K(In), M(Out)]
-            output = ops.cutlass_scaled_fp4_mm(
-                x_fp4, w_fp4, scale_x_fp4, scale_w_fp4, alpha, x.dtype
+            layer._nvfp_linear = QuantLinear.from_linear(
+                lin=layer,
+                w_bit=self.cfg.w_bit,
+                a_bit=self.cfg.a_bit,
+                group_size=self.cfg.group_size,
+                mode=self.cfg.quant_mode,
+                use_zero_point=self.cfg.use_zero_point,
             )
         
-        else:
-            # 'emulation' mode is not supported by vLLM backend
-             raise NotImplementedError(
-                 f"Quant mode '{mode}' is not implemented for vLLM backend. "
-                 f"Use --backend hf for 'emulation' mode."
-             )
+        nvfp_linear = layer._nvfp_linear
 
-        # Add bias (if it exists)
-        if bias is not None:
-            output += bias
+        # 2. NVFP_Linear.forward already handles weight/activation quantization internally
+        out = nvfp_linear(x)
 
-        return output
+        return out
 
 
 @register_quantization_config("nvfp_quant")
@@ -134,23 +76,15 @@ class NVFPQuantConfig(QuantizationConfig):
         w_bit: int = 4,
         a_bit: int = 4,
         group_size: int = 16,
-        quant_mode: str = "pseudo", # [NEW] Added quant_mode
-        ant_config: dict = None,    # [LEGACY] Kept for compatibility
+        quant_mode: str = "pseudo", 
+        use_zero_point: bool = False,
     ) -> None:
         super().__init__()
         self.w_bit = w_bit
         self.a_bit = a_bit
         self.group_size = group_size
-        self.quant_mode = quant_mode # [NEW] Store the mode
-        self.ant_config = ant_config or {
-            "weight_mxfp_mode": "base",
-            "input_mxfp_mode": "base",
-            "ant_mode": "float",
-            "weight_sub_group_size": None,
-            "weight_sub_group_mode": None,
-            "input_sub_group_size": None,
-            "input_sub_group_mode": None,
-        }
+        self.quant_mode = quant_mode 
+        self.use_zero_point = use_zero_point
 
         # vLLM backend cannot run 'emulation' mode as it requires HF-side logic
         if self.quant_mode not in ("pseudo", "real"):
@@ -158,7 +92,7 @@ class NVFPQuantConfig(QuantizationConfig):
                 f"vLLM backend received invalid quant_mode '{self.quant_mode}'. "
                 f"Must be 'pseudo' or 'real'. Use --backend hf for 'emulation'.")
         
-        print(f"[NVFPQuantConfig] Initialized with w_bit={w_bit}, a_bit={a_bit}, mode='{self.quant_mode}'")
+        print(f"[NVFPQuantConfig] Initialized with w_bit={w_bit}, a_bit={a_bit}, mode={self.quant_mode}, group_size={group_size}")
 
 
     def get_name(self) -> str:
@@ -186,8 +120,8 @@ class NVFPQuantConfig(QuantizationConfig):
             w_bit=config.get("w_bit", 4),
             a_bit=config.get("a_bit", 4),
             group_size=config.get("group_size", 16),
-            quant_mode=config.get("quant_mode", "pseudo"), # [NEW] Read quant_mode
-            ant_config=config.get("ant_config"),
+            quant_mode=config.get("quant_mode", "pseudo"), 
+            use_zero_point=config.get("use_zero_point", False),
         )
 
     def get_quant_method(

@@ -28,5 +28,5 @@ model_parameters:
     top_p: 0.9
     seed: 42
     stop_tokens: null
-    max_new_tokens: 2048
+    max_new_tokens: 4096
     min_new_tokens: 0

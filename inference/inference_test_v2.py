@@ -83,15 +83,13 @@ def main():
                         help="Use 'pseudo' (fake-quant + F.linear), 'real' (int GEMM API), or 'emulation' (our simulator)")
     parser.add_argument("--w-bit", type=int, default=4, help="weight bitwidth, e.g., 4 for W4")
     parser.add_argument("--a-bit", type=int, default=4, help="activation bitwidth, e.g., 4 for A4")
-    parser.add_argument("--q-group-size", type=int, default=32, help="group size along in_features for weight per-group quant")
+    parser.add_argument("--q-group-size", type=int, default=16, help="group size along in_features for weight per-group quant")
     parser.add_argument("--zero-point", action="store_true", help="use asymmetric (with zero-point) quant; default symmetric")
     parser.add_argument("--nvfp", action="store_true", help="use nvfp quant")
 
     args = parser.parse_args()
 
     # --- 1) Load model and tokenizer ---
-    # model_dtype = torch.bfloat16 if args.dtype == 'bf16' else (torch.float16 if args.dtype == 'fp16' else torch.float32)
-    # model, tokenizer = load_hf_model(args.model_path, model_dtype)
     model, tokenizer = None, None
     load_model_needed = (args.backend == 'hf') or (args.eval_lib == 'lm-eval') or args.use_prompt
 
@@ -102,9 +100,8 @@ def main():
     else:
         print("[Main] Model loading deferred to vLLM backend.")
 
-    # model_path_vllm 将是我们真正传递给 lighteval_main 的路径
+    # model_path_vllm is the real path to lighteval_main
     model_path_vllm = args.model_path 
-    # temp_vllm_dir 用于在 finally 块中执行清理
     temp_vllm_dir = None
 
     # --- 2) (Optional) Apply Quantization ---
@@ -121,8 +118,18 @@ def main():
                     raise Exception(f"{name} is not supported yet")
                 
                 vllm_model_type_override = name
-                temp_vllm_dir = prepare_vllm_temp_model(args.model_path, vllm_model_type_override)
-                model_path_vllm = temp_vllm_dir # 更新 vLLM 要使用的路径
+
+                # The value of `quant_method` must be the same as `NVFPQuantConfig @register_quantization_config`
+                quant_params = {
+                    "quant_method": "nvfp_quant", # TODO: Support other quant method [FP8, INT8, INT4]
+                    "w_bit": args.w_bit,
+                    "a_bit": args.a_bit,
+                    "group_size": args.q_group_size,
+                    "quant_mode": args.quant_mode,
+                    "use_zero_point": args.zero_point,
+                }
+                temp_vllm_dir = prepare_vllm_temp_model(args.model_path, vllm_model_type_override, quant_params)
+                model_path_vllm = temp_vllm_dir # Update the path used by vLLM
                 
         elif model is not None:
             if args.w_bit is None:

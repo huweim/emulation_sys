@@ -8,13 +8,15 @@ conda activate llm_inference
 
 pip install vllm==0.11.0 --extra-index-url https://download.pytorch.org/whl/cu128
 
-pip install -e ./inference
+pip install -e .
+pip install -e ./inference/eval
 
 git clone --recursive https://github.com/huweim/emulation_sys
 # install nvfp kernel
 git submodule update --init --recursive
 
 pip install lighteval==0.9.0
+pip install "lighteval[math]"
 
 ```
 
@@ -43,7 +45,6 @@ MODEL_PATH=/mnt/model/llama-2-7b-hf
 python -m inference.inference_test_v2 \
   --model_path /mnt/model/llama-2-7b-hf \
   --task wikitext \
-  --dtype fp16 \
   --batch_size 32
 ```
 
@@ -55,7 +56,6 @@ Run the NVFP quantization fidelity test. This compares the PPL score of a pseudo
 python -m inference.inference_test_v2 \
   --model_path /mnt/model/llama-2-7b-hf \
   --task wikitext \
-  --dtype fp16 \
   --batch_size 32 \
   --quantize \
   --quant-mode pseudo \
@@ -66,7 +66,6 @@ python -m inference.inference_test_v2 \
 python -m inference.inference_test_v2 \
   --model_path /mnt/model/llama-2-7b-hf \
   --task wikitext \
-  --dtype fp16 \
   --batch_size 32 \
   --quantize \
   --quant-mode real \
