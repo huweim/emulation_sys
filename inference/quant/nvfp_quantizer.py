@@ -34,8 +34,7 @@ class QuantLinear(nn.Module):
         with torch.no_grad():
             W = lin.weight.detach()  # [out, in]
             if self.mode == "pseudo":
-                Wq = pseudo_quant.nvfp4_pseudo_quantize(W)
-                assert Wq.dtype == torch.float32, "weight dtype must be float32"
+                Wq = pseudo_quant.nvfp4_pseudo_quantize(W).to(self.dtype)
                 self.register_buffer("qweight_fp", Wq)
             else:  # "real"
                 self.FLOAT4_E2M1_MAX = 6.0
@@ -43,13 +42,13 @@ class QuantLinear(nn.Module):
                 w_amax = torch.abs(W).max().to(torch.float32)
                 w_global_scale = self.FLOAT8_E4M3_MAX * self.FLOAT4_E2M1_MAX / w_amax
                 w_fp4, scale_w_fp4 = ops.scaled_fp4_quant(W, w_global_scale)
-                self.register_buffer("w_fp4", w_fp4)  
+                self.register_buffer("w_fp4", w_fp4)
                 self.register_buffer("w_scale_fp4", scale_w_fp4)
                 self.w_global_scale = w_global_scale
                 self.qweight_fp = None  # not used in real mode
 
         if self.bias is not None and isinstance(self.bias, torch.Tensor):
-            self.bias = self.bias.float()
+            self.bias = self.bias.to(self.dtype)
 
     @classmethod
     def from_linear(
@@ -60,13 +59,15 @@ class QuantLinear(nn.Module):
     def forward(self, x):
         # x: [*, in_features]
         original_shape_prefix = x.shape[:-1]
-        
+
         if self.mode == "pseudo":
             if self.a_bit is not None and self.a_bit < 16:
                 x_q = pseudo_quant.nvfp4_pseudo_quantize(x)
+                x_q = x_q.to(dtype=self.dtype, device=x_q.device)
+                x_q = x_q.clone().detach().contiguous()
             else:
-                x_q = x.float()
-            return F.linear(x_q, self.qweight_fp, self.bias).to(self.dtype)
+                x_q = x.to(self.dtype)
+            return F.linear(x_q, self.qweight_fp, self.bias)
         else:  # "real"
             x_amax = torch.abs(x).max().to(torch.float32)
             x_global_scale = self.FLOAT8_E4M3_MAX * self.FLOAT4_E2M1_MAX / x_amax
@@ -75,7 +76,7 @@ class QuantLinear(nn.Module):
             alpha = 1.0 / (x_global_scale * self.w_global_scale)
 
             output = ops.cutlass_scaled_fp4_mm(
-                x_fp4, self.w_fp4, scale_x_fp4, self.w_scale_fp4, alpha, x.dtype
+                x_fp4, self.w_fp4, scale_x_fp4, self.w_scale_fp4, alpha, self.dtype
             )
 
             # reshape output to original batch shape
