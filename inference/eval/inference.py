@@ -1,7 +1,7 @@
 import os
 
-from lighteval_custom import patch
-from lighteval_custom.main_vllm  import vllm
+from .lighteval_custom import patch
+from .lighteval_custom.main_vllm  import vllm
 
 MODELS_ARGS = [
     {
