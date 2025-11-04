@@ -178,3 +178,4 @@ __pycache__
 bin/
 output/
 results/
+.vscode
