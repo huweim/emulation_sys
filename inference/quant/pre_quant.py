@@ -52,12 +52,15 @@ def replace_quant_linear(
     use_zero_point: bool = False,
     init_only: bool = False,  # 保留形参以兼容你现在的调用
     nvfp: bool = False,
+    fp8: bool = False,
     **kwargs,
 ):
     if nvfp:
         from .nvfp_quantizer import QuantLinear
+    elif fp8:
+        from .fp8_quantizer import QuantLinear
     else:
-        from .quantizer_init import QuantLinear
+        from .quantizer import QuantLinear
 
     layers = get_blocks(model)
     group_size = q_config.get("q_group_size", 32)

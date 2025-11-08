@@ -10,7 +10,7 @@ import torch.nn as nn
 
 from transformers import AutoConfig
 
-from lighteval_custom import patch
+from .eval.lighteval_custom import patch
 from .utils.vllm_utils import prepare_vllm_temp_model
 
 from .quant.pre_quant import replace_quant_linear 
@@ -86,6 +86,7 @@ def main():
     parser.add_argument("--q-group-size", type=int, default=16, help="group size along in_features for weight per-group quant")
     parser.add_argument("--zero-point", action="store_true", help="use asymmetric (with zero-point) quant; default symmetric")
     parser.add_argument("--nvfp", action="store_true", help="use nvfp quant")
+    parser.add_argument("--fp8", action="store_true", help="use fp8 quant")
 
     args = parser.parse_args()
 
@@ -147,6 +148,7 @@ def main():
                 use_zero_point=args.zero_point,
                 init_only=False,
                 nvfp=args.nvfp,
+                fp8=args.fp8,
             )
             print("[Main] Quantization applied.")
         else:
