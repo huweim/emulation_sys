@@ -22,7 +22,7 @@ setup(
     name="fp8",
     version="0.1.0",
     # packages=[],  # 不打包 Python 包，仅安装扩展
-    py_modules=["fp8_pseudo_quantize","mm"],
+    py_modules=["fp8_quant_utils"],
     ext_modules=[
         CUDAExtension(
             name="scaled_fp8_ops",
