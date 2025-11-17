@@ -4,9 +4,13 @@
 # ===================================================================================
 
 NVCC := nvcc
-ARCH := sm_120
+ARCH := sm_90a
 NVCCFLAGS := -O3 -std=c++17 -arch=$(ARCH)
 LDFLAGS := -lcudart
+
+# ---- 新增：CUTLASS 头文件路径 ----
+CUTLASS_DIR := /cephfs/wmhu/emulation_workspace/cutlass
+INCLUDES := -I$(CUTLASS_DIR)/include
 
 # 新增：输出目录
 BINDIR := bin
@@ -28,8 +32,11 @@ SOURCE_FMABIT := fma_acc_bitwidth.cu
 TARGET_TCBIT := $(BINDIR)/tc_acc_bitwidth
 SOURCE_TCBIT := tc_acc_bitwidth.cu
 
+TARGET_TCBIT_FP8 := $(BINDIR)/tc_acc_bitwidth_fp8
+SOURCE_TCBIT_FP8 := tc_acc_bitwidth_fp8.cu
+
 # 默认规则
-all: $(BINDIR) $(TARGET_2WAY) $(TARGET_3WAY) $(TARGET_BIT) $(TARGET_FMABIT) $(TARGET_TCBIT)
+all: $(BINDIR) $(TARGET_2WAY) $(TARGET_3WAY) $(TARGET_BIT) $(TARGET_FMABIT) $(TARGET_TCBIT) $(TARGET_TCBIT_FP8)
 
 # 新增：创建 bin/
 $(BINDIR):
@@ -38,27 +45,32 @@ $(BINDIR):
 # 编译规则
 $(TARGET_2WAY): $(SOURCE_2WAY)
 	@echo "--- Compiling $< -> $@"
-	$(NVCC) $(NVCCFLAGS) -o $@ $< $(LDFLAGS)
+	$(NVCC) $(NVCCFLAGS) $(INCLUDES) -o $@ $< $(LDFLAGS)
 	@echo "--- Finished building $@ ---"
 
 $(TARGET_3WAY): $(SOURCE_3WAY)
 	@echo "--- Compiling $< -> $@"
-	$(NVCC) $(NVCCFLAGS) -o $@ $< $(LDFLAGS)
+	$(NVCC) $(NVCCFLAGS) $(INCLUDES) -o $@ $< $(LDFLAGS)
 	@echo "--- Finished building $@ ---"
 
 $(TARGET_BIT): $(SOURCE_BIT)
 	@echo "--- Compiling $< -> $@"
-	$(NVCC) $(NVCCFLAGS) -o $@ $< $(LDFLAGS)
+	$(NVCC) $(NVCCFLAGS) $(INCLUDES) -o $@ $< $(LDFLAGS)
 	@echo "--- Finished building $@ ---"
 
 $(TARGET_FMABIT): $(SOURCE_FMABIT)
 	@echo "--- Compiling $< -> $@"
-	$(NVCC) $(NVCCFLAGS) -o $@ $< $(LDFLAGS)
+	$(NVCC) $(NVCCFLAGS) $(INCLUDES) -o $@ $< $(LDFLAGS)
 	@echo "--- Finished building $@ ---"
 
 $(TARGET_TCBIT): $(SOURCE_TCBIT)
 	@echo "--- Compiling $< -> $@"
-	$(NVCC) $(NVCCFLAGS) -o $@ $< $(LDFLAGS)
+	$(NVCC) $(NVCCFLAGS) $(INCLUDES) -o $@ $< $(LDFLAGS)
+	@echo "--- Finished building $@ ---"
+
+$(TARGET_TCBIT_FP8): $(SOURCE_TCBIT_FP8)
+	@echo "--- Compiling $< -> $@"
+	$(NVCC) $(NVCCFLAGS) $(INCLUDES) -o $@ $< $(LDFLAGS)
 	@echo "--- Finished building $@ ---"
 
 # SASS 生成（输出到 bin/）
@@ -66,7 +78,8 @@ sass: $(BINDIR)/gemm_comparison.sass \
       $(BINDIR)/gemm_3way_comparison.sass \
       $(BINDIR)/bit_width_test.sass \
       $(BINDIR)/fma_acc_bitwidth.sass \
-      $(BINDIR)/tc_acc_bitwidth.sass
+      $(BINDIR)/tc_acc_bitwidth.sass \
+      $(BINDIR)/tc_acc_bitwidth_fp8.sass
 	@echo "--- All SASS files generated ---"
 
 # 从 bin/ 下的可执行生成 bin/ 下的 .sass
