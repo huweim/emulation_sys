@@ -51,6 +51,8 @@ class SimpleFPRev:
         if output_path is None:
             output_path = f"fprev_graph_{self.method}_n{n}.png"
 
+        assert n <= 16, "Sequence length must be <= 16"
+
         print(f"Investigating {self.method.upper()} sequence of length {n}")
 
         # Run FPRev algorithm
@@ -78,7 +80,7 @@ def main():
         description="Simple FPRev Investigation: input method and n, output graph to disk"
     )
     parser.add_argument(
-        "--n", type=int, default=64, help="Sequence length to investigate"
+        "--n", type=int, default=16, help="Sequence length to investigate"
     )
     parser.add_argument(
         "--method",

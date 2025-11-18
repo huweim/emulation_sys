@@ -16,19 +16,14 @@ python setup.py install
 The tool provides a simple CLI to investigate sequences and generate graphs:
 
 ```bash
-# Investigate GEMV accumulation with default length (64)
+# Investigate GEMV accumulation with default length (16)
 python python/main.py --method gemv
 
-# Investigate FMA accumulation with custom length
-python python/main.py --method fma --n 128
-
-# Specify output path for the graph
-python python/main.py --method gemv --n 64 --output my_graph.png
 ```
 
 ### Options
 
-- `--n`: Sequence length to investigate (default: 64)
+- `--n`: Sequence length to investigate (default: 16)
 - `--method`: Accumulation method (`fma` or `gemv`, default: `gemv`)
 - `--output`: Output path for the generated graph (default: auto-generated)
 

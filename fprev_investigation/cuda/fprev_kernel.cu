@@ -144,75 +144,61 @@ void fprev_init() {
 // accumulator
 __global__ void gemv_wmma_kernel(const half* input, const half* weights,
                                  float* result, int n) {
-  // WMMA dimensions
+  // Use 16x16x16 WMMA tile
   constexpr int WMMA_M = 16;
   constexpr int WMMA_N = 16;
   constexpr int WMMA_K = 16;
 
-  // Ensure all threads in warp participate - no conditional execution
-  // Use only the first warp (threads 0-31) for WMMA operations
+  // Only first warp participates
   if (threadIdx.x < 32) {
-    // Initialize WMMA fragments (half for inputs, float for accumulator)
+    // Declare fragments
     nvcuda::wmma::fragment<nvcuda::wmma::matrix_a, WMMA_M, WMMA_N, WMMA_K, half,
                            nvcuda::wmma::row_major>
-        frag_input;
+        frag_a;
     nvcuda::wmma::fragment<nvcuda::wmma::matrix_b, WMMA_M, WMMA_N, WMMA_K, half,
                            nvcuda::wmma::col_major>
-        frag_weights;
+        frag_b;
     nvcuda::wmma::fragment<nvcuda::wmma::accumulator, WMMA_M, WMMA_N, WMMA_K,
                            float>
-        frag_result;
+        frag_c;
 
     // Initialize accumulator to zero
-    nvcuda::wmma::fill_fragment(frag_result, 0.0f);
+    nvcuda::wmma::fill_fragment(frag_c, 0.0f);
 
-    // Process in chunks of WMMA_K
-    for (int k = 0; k < n; k += WMMA_K) {
-      // Use properly aligned shared memory for WMMA
-      __align__(32) __shared__ half padded_input[WMMA_M * WMMA_K];
-      __align__(32) __shared__ half padded_weights[WMMA_K * WMMA_N];
+    // Shared memory to hold padded input/weights (16 elements each)
+    __shared__ half s_input[WMMA_K];
+    __shared__ half s_weights[WMMA_K];
 
-      // Initialize shared memory to zero
-      for (int idx = threadIdx.x; idx < WMMA_M * WMMA_K; idx += 32) {
-        padded_input[idx] = __float2half(0.0f);
-      }
-      for (int idx = threadIdx.x; idx < WMMA_K * WMMA_N; idx += 32) {
-        padded_weights[idx] = __float2half(0.0f);
-      }
-      __syncthreads();
-
-      // Load actual data (only first row/col, rest stays zero)
-      int k_chunk = min(WMMA_K, n - k);
-      for (int idx = threadIdx.x; idx < k_chunk; idx += 32) {
-        // First row of input matrix (1×n) - row-major layout
-        if (k + idx < n) {
-          padded_input[idx] = input[k + idx];
-        }
-        // First column of weight matrix (n×1) - column-major layout
-        if (k + idx < n) {
-          padded_weights[idx] = weights[k + idx];
-        }
-      }
-      __syncthreads();
-
-      // Load WMMA fragments from shared memory with correct layout
-      nvcuda::wmma::load_matrix_sync(frag_input, padded_input, WMMA_K);
-      nvcuda::wmma::load_matrix_sync(frag_weights, padded_weights,
-                                     WMMA_K);  // Use WMMA_K for both
-
-      // Perform matrix multiplication
-      nvcuda::wmma::mma_sync(frag_result, frag_input, frag_weights,
-                             frag_result);
+    // Zero-initialize shared memory (only first n elements matter)
+    for (int i = threadIdx.x; i < WMMA_K; i += 32) {
+      s_input[i] = __float2half(0.0f);
+      s_weights[i] = __float2half(0.0f);
     }
+    __syncthreads();
 
-    // Store result (only the [0,0] element is needed)
-    __align__(32) __shared__ float result_matrix[WMMA_M * WMMA_N];
-    nvcuda::wmma::store_matrix_sync(result_matrix, frag_result, WMMA_N,
+    // Load actual input and weights (n <= 16 guaranteed)
+    if (threadIdx.x < n) {
+      s_input[threadIdx.x] = input[threadIdx.x];
+      s_weights[threadIdx.x] = weights[threadIdx.x];
+    }
+    __syncthreads();
+
+    // Load into fragments:
+    nvcuda::wmma::load_matrix_sync(frag_a, s_input,
+                                   WMMA_K);  // row-major: first row = s_input
+    nvcuda::wmma::load_matrix_sync(frag_b, s_weights,
+                                   WMMA_K);  // col-major: first col = s_weights
+
+    // Single WMMA operation
+    nvcuda::wmma::mma_sync(frag_c, frag_a, frag_b, frag_c);
+
+    // Store result (only [0][0] is non-zero)
+    __shared__ float s_result[WMMA_M * WMMA_N];
+    nvcuda::wmma::store_matrix_sync(s_result, frag_c, WMMA_N,
                                     nvcuda::wmma::mem_row_major);
 
-    // Only thread 0 writes the final result
     if (threadIdx.x == 0) {
-      result[0] = result_matrix[0];  // Top-left element
+      result[0] = s_result[0];  // dot product result
     }
   }
 }

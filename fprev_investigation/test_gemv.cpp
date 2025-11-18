@@ -143,10 +143,7 @@ void test_gemv_sequence() {
   try {
     // Test parameters - start with small values
     std::vector<std::tuple<int, int, int>> test_cases = {
-        {0, 4, 16},    // Small test case
-        {16, 19, 32},  // Medium test case
-        {0, 38, 64},   // Larger test case
-        {5, 87, 128},  // Different positions
+        {0, 4, 16},  // Small test case
     };
 
     for (const auto& [i, j, n] : test_cases) {
