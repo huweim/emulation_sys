@@ -179,3 +179,6 @@ bin/
 output/
 results/
 .vscode
+
+*.o
+test_gemv
