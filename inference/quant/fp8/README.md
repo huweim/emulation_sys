@@ -1,3 +1,4 @@
+In real mode, x quant block is [1, 128], w quant block is [128, 128]
 ```shell
 pip install -e .
 # --- Run 1: Pseudo Quant ---
@@ -14,7 +15,7 @@ python -m inference.inference_test_v2 \
 
 # --- Run 2: Real Quant ---
 # This dequant fp8 tp bf16 and gemm(fp8 gemm is todo)
-#PPL on wikitext: 5.484386920928955
+#PPL on wikitext: 5.488485336303711
 python -m inference.inference_test_v2 \
   --model_path /mnt/model/llama-2-7b-hf \
   --task wikitext \
