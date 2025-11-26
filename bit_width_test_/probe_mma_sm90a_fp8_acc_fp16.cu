@@ -14,8 +14,8 @@
 #include <cmath>
 #include <cstring> 
 
-/// RUN: nvcc -arch=sm_90a -std=c++17 -DDEBUG -Xcompiler -fopenmp matmul-fp8-fp16.cu -o test_fp8_fp16 && ./test_fp8_fp16
-/// RUN: nvcc -arch=sm_90a matmul-fp8-fp16.cu -o test_fp8_fp16 && ./test_fp8_fp16 stages 1 iters 200
+/// RUN: nvcc -arch=sm_90a -std=c++17 -DDEBUG -Xcompiler -fopenmp probe_mma_sm90a_fp8_acc_fp16.cu -o test_fp8_fp16 && ./test_fp8_fp16
+/// RUN: nvcc -arch=sm_90a probe_mma_sm90a_fp8_acc_fp16.cu -o test_fp8_fp16 && ./test_fp8_fp16 stages 1 iters 200
 
 
 typedef __nv_fp8_e5m2 e5m2;

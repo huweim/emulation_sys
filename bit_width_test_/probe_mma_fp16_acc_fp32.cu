@@ -25,6 +25,8 @@ do {                                                                            
 #define WMMA_N 16
 #define WMMA_K 16
 
+// TOOD: Any corner case? The START_BIT may not start from 23/24. Generally, we will see the test from PASS to FAIL. 
+
 __global__ void probe_tensorcore_inner_acc_kernel(const half* A, const half* B_col, 
                                                   float* C_out, int M, int N, int K, float c_init) {
     if (blockIdx.x == 0 && threadIdx.x < 32) { // Only one warp executes

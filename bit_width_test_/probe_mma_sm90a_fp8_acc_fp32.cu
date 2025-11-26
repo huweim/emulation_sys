@@ -14,7 +14,7 @@
 #include <cmath>
 #include <cstring> 
 
-/// RUN: nvcc -arch=sm_90a -std=c++17 matmul-fp8-fp32.cu -o test && ./test
+/// RUN: nvcc -arch=sm_90a -std=c++17 probe_mma_sm90a_fp8_acc_fp32.cu -o test && ./test
 
 typedef __nv_fp8_e5m2 e5m2;
 
