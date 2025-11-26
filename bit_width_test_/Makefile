@@ -1,110 +1,86 @@
+/// RUN: make sm80     # A100 (sm_80): build universal probes
+/// RUN: make sm89     # RTX 4090 (sm_89): build universal probes
+/// RUN: make sm90     # H100 (sm_90 + sm_90a): universal + WGMMA probes
+/// RUN: make sm120    # RTX 5090 (sm_120): build universal probes
+/// RUN: make clean    # remove bin/
+
 # ===================================================================================
-# Makefile for CUDA GEMM Emulation Project (Final)
+# Makefile for Tensor Core Bit-Width Probing
 # ===================================================================================
 
-# Compiler & Flags
-NVCC := nvcc
-# Default architecture for older tests (e.g., RTX 4090 / A100)
-DEFAULT_ARCH := sm_80
-# DEFAULT_ARCH := sm_89
-# DEFAULT_ARCH := sm_90a
-# DEFAULT_ARCH := sm_120
-# Specific architecture for H100/Hopper tests (WGMMA requires sm_90a)
-H100_ARCH := sm_90a
-
-# Common Flags
+NVCC      := nvcc
+BINDIR    := bin
+SRCDIR    := src
 NVCCFLAGS := -O3 -std=c++17
 LDFLAGS   := -lcudart
 
-# Path settings (adjust if needed)
+# CUTLASS path (Adjust as needed)
 CUTLASS_DIR := /cephfs/wmhu/emulation_workspace/cutlass
-INCLUDES    := -I$(CUTLASS_DIR)/include
+INCLUDES    := -I$(CUTLASS_DIR)/include -I./include
 
-# Output Directory
-BINDIR := bin
+# --- Source Files Definitions ---
 
-# --- Targets Definition ---
+# 1) Universal Probes (SM80+): WMMA / MMA，不依赖 WGMMA
+SRC_UNIVERSAL := \
+    $(SRCDIR)/probe_fma_fp32.cu \
+    $(SRCDIR)/probe_wmma_fp16_acc_fp32.cu \
+    $(SRCDIR)/probe_mma_fp16_acc_fp16.cu
 
-# 1. Precision Comparison (TC vs FMA)
-TARGET_2WAY := $(BINDIR)/gemm_comparison
-SOURCE_2WAY := gemm_comparison.cu
+# 2) Hopper-specific Probes (SM90a): WGMMA inline PTX
+#    使用你目录中的实际文件名（probe_wgmma_sm90a_*）
+SRC_HOPPER := \
+    $(SRCDIR)/probe_wgmma_sm90a_fp8_acc_fp32.cu \
+    $(SRCDIR)/probe_wgmma_sm90a_fp8_acc_fp16.cu
 
-# 2. 3-Way Comparison (TC vs Seq FMA vs Tree FMA)
-TARGET_3WAY := $(BINDIR)/gemm_3way_comparison
-SOURCE_3WAY := gemm_3way_comparison.cu
-
-# 3. Basic Bit Width Tests (Legacy)
-TARGET_BIT      := $(BINDIR)/bit_width_test
-SOURCE_BIT      := bit_width_test.cu
-
-TARGET_FMABIT   := $(BINDIR)/probe_fma_fp32
-SOURCE_FMABIT   := probe_fma_fp32.cu
-
-TARGET_TCBIT    := $(BINDIR)/probe_mma_fp16_acc_fp32
-SOURCE_TCBIT    := probe_mma_fp16_acc_fp32.cu
-
-# 4. H100 FP8 Probing (The Core Result)
-# Renamed to reflect its purpose: probing FP8 input -> FP32/FP16 accumulation
-TARGET_H100_FP8 := $(BINDIR)/probe_mma_sm90a_fp8_acc_fp32
-SOURCE_H100_FP8 := probe_mma_sm90a_fp8_acc_fp32.cu
-
-TARGET_H100_FP8_FP16ACC := $(BINDIR)/probe_mma_sm90a_fp8_acc_fp16
-SOURCE_H100_FP8_FP16ACC := probe_mma_sm90a_fp8_acc_fp16.cu
-
+# --- Helper: map src -> bin ---
+GET_BIN_NAME = $(patsubst $(SRCDIR)/%.cu,$(BINDIR)/%,$(1))
 
 # --- Rules ---
 
-# Default: Build everything
-# all: $(BINDIR) $(TARGET_2WAY) $(TARGET_3WAY) $(TARGET_H100_FP8) $(TARGET_FMABIT) $(TARGET_TCBIT)
-all: $(BINDIR) $(TARGET_TCBIT)
+.PHONY: all clean sm80 a100 sm89 4090 sm90 h100 sm120 5090 hopper_specific
 
-# Create bin directory
+# 默认：先编 Ada (sm_89)
+all: sm89
+
 $(BINDIR):
 	@mkdir -p $@
 
-# --- Compilation Rules ---
+# =============== Architecture Targets ===============
 
-# Standard targets (using DEFAULT_ARCH)
-$(TARGET_2WAY): $(SOURCE_2WAY)
-	@echo "--- Compiling $< [$(DEFAULT_ARCH)] ---"
-	$(NVCC) $(NVCCFLAGS) -arch=$(DEFAULT_ARCH) $(INCLUDES) -o $@ $< $(LDFLAGS)
+# A100 (Ampere)
+sm80 a100: ARCH_FLAG := -arch=sm_80
+sm80 a100: $(BINDIR) $(call GET_BIN_NAME,$(SRC_UNIVERSAL))
+	@echo ">>> Built Universal Probes for A100 (sm_80)"
 
-$(TARGET_3WAY): $(SOURCE_3WAY)
-	@echo "--- Compiling $< [$(DEFAULT_ARCH)] ---"
-	$(NVCC) $(NVCCFLAGS) -arch=$(DEFAULT_ARCH) $(INCLUDES) -o $@ $< $(LDFLAGS)
+# RTX 4090 (Ada)
+sm89 4090: ARCH_FLAG := -arch=sm_89
+sm89 4090: $(BINDIR) $(call GET_BIN_NAME,$(SRC_UNIVERSAL))
+	@echo ">>> Built Universal Probes for RTX 4090 (sm_89)"
 
-$(TARGET_BIT): $(SOURCE_BIT)
-	@echo "--- Compiling $< [$(DEFAULT_ARCH)] ---"
-	$(NVCC) $(NVCCFLAGS) -arch=$(DEFAULT_ARCH) $(INCLUDES) -o $@ $< $(LDFLAGS)
+# H100 (Hopper): Universal + Hopper-specific(WGMMA, sm_90a)
+sm90 h100: ARCH_FLAG := -arch=sm_90
+sm90 h100: $(BINDIR) $(call GET_BIN_NAME,$(SRC_UNIVERSAL)) hopper_specific
+	@echo ">>> Built All Probes for H100 (sm_90 + sm_90a WGMMA)"
 
-$(TARGET_FMABIT): $(SOURCE_FMABIT)
-	@echo "--- Compiling $< [$(DEFAULT_ARCH)] ---"
-	$(NVCC) $(NVCCFLAGS) -arch=$(DEFAULT_ARCH) $(INCLUDES) -o $@ $< $(LDFLAGS)
+# RTX 5090 (Blackwell Consumer, SM120): 仅编 Universal（mma.sync 路线）
+sm120 5090: ARCH_FLAG := -arch=sm_120
+sm120 5090: $(BINDIR) $(call GET_BIN_NAME,$(SRC_UNIVERSAL))
+	@echo ">>> Built Universal Probes for RTX 5090 (sm_120)"
 
-$(TARGET_TCBIT): $(SOURCE_TCBIT)
-	@echo "--- Compiling $< [$(DEFAULT_ARCH)] ---"
-	$(NVCC) $(NVCCFLAGS) -arch=$(DEFAULT_ARCH) $(INCLUDES) -o $@ $< $(LDFLAGS)
+# =============== Compile Recipes ===============
 
-# H100 Specific targets (FORCE sm_90a)
-$(TARGET_H100_FP8): $(SOURCE_H100_FP8)
-	@echo "--- Compiling $< [$(H100_ARCH)] ---"
-	$(NVCC) $(NVCCFLAGS) -arch=$(H100_ARCH) $(INCLUDES) -o $@ $< $(LDFLAGS)
+# 先放 Hopper-specific（更专用的模式优先匹配）
+$(BINDIR)/probe_wgmma_sm90a_%: $(SRCDIR)/probe_wgmma_sm90a_%.cu
+	@echo "--- Compiling Hopper Probe $< [sm_90a] ---"
+	$(NVCC) $(NVCCFLAGS) -arch=sm_90a $(INCLUDES) -o $@ $< $(LDFLAGS)
 
-$(TARGET_H100_FP8_FP16ACC): $(SOURCE_H100_FP8_FP16ACC)
-	@echo "--- Compiling $< [$(H100_ARCH)] ---"
-	$(NVCC) $(NVCCFLAGS) -arch=$(H100_ARCH) $(INCLUDES) -o $@ $< $(LDFLAGS)
+# Universal sources（跟随各自 ARCH_FLAG）
+$(BINDIR)/%: $(SRCDIR)/%.cu
+	@echo "--- Compiling $< [$(ARCH_FLAG)] ---"
+	$(NVCC) $(NVCCFLAGS) $(ARCH_FLAG) $(INCLUDES) -o $@ $< $(LDFLAGS)
 
-# --- Utilities ---
-
-# Generate SASS for analysis
-sass: $(TARGET_3WAY) $(TARGET_H100_FP8)
-	@echo "--- Generating SASS ---"
-	cuobjdump -sass $(TARGET_3WAY) > $(TARGET_3WAY).sass
-	cuobjdump -sass $(TARGET_H100_FP8) > $(TARGET_H100_FP8).sass
-	@echo "--- SASS files generated in $(BINDIR) ---"
+# 聚合构建：所有 Hopper 专用探针
+hopper_specific: $(call GET_BIN_NAME,$(SRC_HOPPER))
 
 clean:
-	@echo "--- Cleaning up ---"
 	rm -rf $(BINDIR)
-
-.PHONY: all clean sass
