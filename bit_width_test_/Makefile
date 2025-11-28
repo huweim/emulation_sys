@@ -24,7 +24,9 @@ INCLUDES    := -I$(CUTLASS_DIR)/include -I./include
 SRC_UNIVERSAL := \
     $(SRCDIR)/probe_fma_fp32.cu \
     $(SRCDIR)/probe_wmma_fp16_acc_fp32.cu \
-    $(SRCDIR)/probe_mma_fp16_acc_fp16.cu
+    $(SRCDIR)/probe_mma_fp16_acc_fp16.cu \
+	$(SRCDIR)/probe_mma_fp8_acc_fp32.cu \
+	$(SRCDIR)/probe_mma_fp4_acc_fp32.cu
 
 # 2) Hopper-specific Probes (SM90a): WGMMA inline PTX
 #    使用你目录中的实际文件名（probe_wgmma_sm90a_*）
@@ -63,7 +65,7 @@ sm90 h100: $(BINDIR) $(call GET_BIN_NAME,$(SRC_UNIVERSAL)) hopper_specific
 	@echo ">>> Built All Probes for H100 (sm_90 + sm_90a WGMMA)"
 
 # RTX 5090 (Blackwell Consumer, SM120): 仅编 Universal（mma.sync 路线）
-sm120 5090: ARCH_FLAG := -arch=sm_120
+sm120 5090: ARCH_FLAG := -arch=sm_120a
 sm120 5090: $(BINDIR) $(call GET_BIN_NAME,$(SRC_UNIVERSAL))
 	@echo ">>> Built Universal Probes for RTX 5090 (sm_120)"
 
