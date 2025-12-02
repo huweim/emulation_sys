@@ -13,6 +13,7 @@ Through systematic probing, we have reverse-engineered the following behaviors:
 | A100 (sm_80), 4090 (sm_89), A6000 (sm_89) | FP16           | FP32                 | `wmma`                | **24 bits** | **RZ** (Round-to-Zero / Truncate) |
 | H100 (sm_90a), 5090 (sm_120)            | FP16           | FP32                 | `wmma`                | **25 bits**  | **RZ** (Round-to-Zero / Truncate) |
 | H100 (sm_90a)            | FP8 (E5M2)     | FP32                 | `wgmma`               | **13 bits**                 | **RZ** (Round-to-Zero / Truncate) |
+ RTX 5090 (sm_120a) | FP4 (E2M1, MXFP4/NVFP4, scaled) | FP32 | `mma.sync` — m16n8k32 (`kind::mxf8f6f4`), m16n8k64 (`kind::mxf4nvf4`) | **25 bits** | **RZ** |
 
 **Core Conclusion**: Tensor Core accumulation is best modeled as a **Multi-term Summation** followed by a **Single Final Rounding (RZ)** step.
 
@@ -22,7 +23,7 @@ Through systematic probing, we have reverse-engineered the following behaviors:
 
 **Prerequisites:**
 * NVIDIA GPU (Ampere or newer recommended; Hopper required for FP8 tests)
-* CUDA Toolkit 11.8+ (12.0+ recommended for FP8)
+* CUDA Toolkit 11.8+ (12.0+ recommended for FP8, 12.8 for SM120a FP4 scaled MMA )
 
 ```shell
 # Clone the repository
@@ -62,9 +63,24 @@ Shell
 ```
 # Probes the accumulation path: FP8 x FP8 -> FP32 Accumulator
 # Verifies if H100 uses a wider-than-standard-FP32 accumulator.
-./bin/probe_h100_fp8
+./bin/probe_wgmma_sm90a_fp8_acc_fp32
+```
+### 3. Probe Accumulator Bit-Width (FP4 on RTX 5090)
+
+**Requires RTX 5090 (sm_120a).** We provide two PTX paths:
+
+- **MXFP4 (unified container):** `kind::mxf8f6f4`, **m16n8k32**, one-element per-byte packing, padding for FP4 and FP6
+- **NVFP4 / compact FP4:** `kind::mxf4nvf4`, **m16n8k64**, two-element per-byte packing
+
+```bash
+# MXFP4 (unified container, k=32)
+./bin/probe_mma_mxfp4_acc_fp32
+
+# NVFP4 / compact FP4 (k=64)
+./bin/probe_mma_nvfp4_acc_fp32
 ```
 
+:warning: Note on FP4 packing: On SM120a, kind::mxf8f6f4 packs one element per-byte for F4 (unified across F8/F6/F4); kind::mxf4nvf4 packs two FP4 per byte. Scaled MMA requires providing scale data (ue8m0/ue4m3) and {byte-id, thread-id} selectors.
 
 ## Roadmap and TODO
 
