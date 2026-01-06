@@ -34,7 +34,7 @@ class QuantLinear(nn.Module):
         with torch.no_grad():
             W = lin.weight.detach()  # [out, in]
             if self.mode == "pseudo":
-                Wq = pseudo_quant.nvfp4_pseudo_quantize(W)
+                Wq = pseudo_quant.nvfp4_pseudo_quantize(W).float()
                 self.register_buffer("qweight_fp", Wq)
             else:  # "real"
                 self.FLOAT4_E2M1_MAX = 6.0
@@ -48,7 +48,7 @@ class QuantLinear(nn.Module):
                 self.qweight_fp = None  # not used in real mode
 
         if self.bias is not None and isinstance(self.bias, torch.Tensor):
-            self.bias = self.bias.to(torch.float)
+            self.bias = self.bias.to(torch.double)
 
     @classmethod
     def from_linear(
@@ -63,10 +63,10 @@ class QuantLinear(nn.Module):
         if self.mode == "pseudo":
             if self.a_bit is not None and self.a_bit < 16:
                 x_q = pseudo_quant.nvfp4_pseudo_quantize(x)
-                x_q = x_q.clone().detach().contiguous()
+                x_q = x_q.double().contiguous()
             else:
-                x_q = x.to(torch.float)
-            return F.linear(x_q, self.qweight_fp, self.bias).to(x.dtype)
+                x_q = x.to(torch.double)
+            return F.linear(x_q, self.qweight_fp.double(), self.bias).to(x.dtype)
         else:  # "real"
             x_amax = torch.abs(x).max().to(torch.float32)
             x_global_scale = self.FLOAT8_E4M3_MAX * self.FLOAT4_E2M1_MAX / x_amax

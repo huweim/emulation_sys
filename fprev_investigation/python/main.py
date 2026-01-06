@@ -32,7 +32,7 @@ class SimpleFPRev:
         Initialize the investigator
 
         Args:
-            method: Accumulation method ("fma", "gemv")
+            method: Accumulation method ("fma", "gemv", "nvfp")
         """
         self.method = method
 
@@ -51,23 +51,23 @@ class SimpleFPRev:
         if output_path is None:
             output_path = f"fprev_graph_{self.method}_n{n}.png"
 
-        assert n <= 16, "Sequence length must be <= 16"
-
         print(f"Investigating {self.method.upper()} sequence of length {n}")
 
+        self.fprev.print_all(n)
+
         # Run FPRev algorithm
-        tree = self.fprev.investigate_sequence(n, method=self.method)
+        # tree = self.fprev.investigate_sequence(n, method=self.method)
 
-        # Save visualization to disk
-        tree.visualize(
-            f"{self.method.upper()} Accumulation Tree (n={n})", save_path=output_path
-        )
+        # # Save visualization to disk
+        # tree.visualize(
+        #     f"{self.method.upper()} Accumulation Tree (n={n})", save_path=output_path
+        # )
 
-        # Basic analysis
-        analysis = self.fprev.analyze_accumulation_pattern(tree)
-        print(
-            f"Pattern: {analysis['accumulation_pattern']}, Depth: {analysis['depth']}, Nodes: {analysis['num_nodes']}"
-        )
+        # # Basic analysis
+        # analysis = self.fprev.analyze_accumulation_pattern(tree)
+        # print(
+        #     f"Pattern: {analysis['accumulation_pattern']}, Depth: {analysis['depth']}, Nodes: {analysis['num_nodes']}"
+        # )
 
     def cleanup(self):
         """Cleanup resources"""
@@ -84,9 +84,9 @@ def main():
     )
     parser.add_argument(
         "--method",
-        choices=["fma", "gemv"],
-        default="gemv",
-        help="Accumulation method to use (default: fma)",
+        choices=["fma", "gemv", "nvfp"],
+        default="nvfp",
+        help="Accumulation method to use (default: gemv)",
     )
     parser.add_argument(
         "--output", type=str, help="Output path for the graph (default: auto-generated)"

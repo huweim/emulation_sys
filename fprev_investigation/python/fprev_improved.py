@@ -4,6 +4,19 @@ from dataclasses import dataclass
 import matplotlib.pyplot as plt
 import networkx as nx
 
+# Try to import nvfp for nvfp quantization support
+try:
+    import torch
+    import nvfp.ops as ops
+    import nvfp.pseudo_quant as pseudo_quant
+
+    NVFP_AVAILABLE = True
+except ImportError:
+    NVFP_AVAILABLE = False
+    torch = None
+    ops = None
+    pseudo_quant = None
+
 
 @dataclass
 class TreeNode:
@@ -106,16 +119,100 @@ class ImprovedFPRev:
         array[j] = -M_VALUE
         return array
 
+    def _compute_l_ij_nvfp(self, i: int, j: int, n: int) -> float:
+        """
+        Compute l_ij using NVFP quantization to test accumulation order.
+        Creates n×n matrices A and B, applies NVFP quantization, and uses matrix multiplication.
+        Similar to gemv_sequence_test in fprev_kernel.cu but with matrix multiplication.
+
+        Args:
+            i, j: Indices for the test values
+            n: Matrix dimension
+        """
+        if not NVFP_AVAILABLE:
+            raise ImportError("NVFP is not available. Please install nvfp package.")
+
+        M_VALUE = 57344.0  # ensure 1 is quantized to 1.0
+        self.FLOAT4_E2M1_MAX = 6.0
+        self.FLOAT8_E4M3_MAX = 448.0
+
+        n *= 16
+        A = torch.ones(n, n, dtype=torch.half, device="cuda")
+        B = torch.ones(n, n, dtype=torch.half, device="cuda")
+
+        for t in range(16):
+            A[0, 16 * i + t] = -M_VALUE
+            B[0, 16 * i + t] = M_VALUE
+            A[0, 16 * j + t] = M_VALUE
+            B[0, 16 * j + t] = M_VALUE
+
+        # i_base_4 = i & (~3)
+        # j_base_4 = j & (~3)
+
+        # for t in range(4):
+        #     if (j_base_4 + t) != i and (j_base_4 + t) != j:
+        #         for k in range(16):
+        #             A[0, 16 * (j_base_4 + t) + k] = 0
+
+        # Real quantization using actual FP4 computation
+        A_amax = torch.abs(A).max().to(torch.float32)
+        A_global_scale = self.FLOAT8_E4M3_MAX * self.FLOAT4_E2M1_MAX / A_amax
+        A_fp4, scale_A_fp4 = ops.scaled_fp4_quant(A, A_global_scale)
+
+        B_amax = torch.abs(B).max().to(torch.float32)
+        B_global_scale = self.FLOAT8_E4M3_MAX * self.FLOAT4_E2M1_MAX / B_amax
+        B_fp4, scale_B_fp4 = ops.scaled_fp4_quant(B, B_global_scale)
+
+        alpha = 1.0 / (A_global_scale * B_global_scale)
+        output = ops.cutlass_scaled_fp4_mm(
+            A_fp4, B_fp4, scale_A_fp4, scale_B_fp4, alpha, torch.float16
+        )
+        sum_val_real = output[0, 0].item() / 16.0
+
+        # Pseudo quantization: quantize to FP4 and dequantize back to float32
+        A_pseudo = pseudo_quant.nvfp4_pseudo_quantize(A)
+        B_pseudo = pseudo_quant.nvfp4_pseudo_quantize(B)
+
+        # Use standard matrix multiplication with pseudo-quantized tensors
+        output = torch.matmul(A_pseudo.double(), B_pseudo.double().T).to(torch.float16)
+        sum_val_pseudo = output[0, 0].item() / 16.0
+        print(f"i={i}, j={j}, sum_real={sum_val_real}, sum_pseudo={sum_val_pseudo}")
+
+        return sum_val_real
+
     def compute_l_ij(self, i: int, j: int, n: int, method: str = "gemv") -> int:
+        """
+        Compute l_ij value using specified method and quantization mode.
+
+        Args:
+            i, j: Indices for the test values
+            n: Array/matrix dimension
+            method: "fma", "gemv", "nvfp_real", "nvfp_pseudo"
+            quant_mode: "real" or "pseudo" (only used with nvfp methods)
+        """
         if method == "fma":
             A = self.create_test_array(i, j, n)
             sum_val = self.sumimpl_fma(A)
         elif method == "gemv":
             sum_val = self.cuda_module.gemv_sequence_test(i, j, n)
+        elif method == "nvfp":
+            sum_val = self._compute_l_ij_nvfp(i, j, n)
         else:
             raise ValueError(f"Unknown method: {method}")
-        val = int(round(n - sum_val))  # l_ij = n - SUMIMPL(A_ij)
+        val = int(n - sum_val)  # l_ij = n - SUMIMPL(A_ij)
         return val
+
+    def print_all(self, n: int, method: str = "nvfp"):
+        """
+        Print all l_ij values for given n using specified method and quantization mode.
+
+        Args:
+            n: Array/matrix dimension
+            method: "fma", "gemv", "nvfp", "nvfp_real", "nvfp_pseudo"
+        """
+        for i in range(n):
+            for j in range(i + 1, n):
+                self.compute_l_ij(i, j, n, method)
 
     def investigate_sequence(self, n: int, method: str = "gemv") -> SummationTree:
         self.n = n
