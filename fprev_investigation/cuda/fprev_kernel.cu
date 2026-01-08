@@ -19,8 +19,8 @@
     }                                                       \
   } while (0)
 
-// Large value M for swamping effect (2^127 for float32)
-#define M_VALUE 5e4f
+// Large value M for swamping effect (8190.0f is the minimum value on RTX 5090)
+#define M_VALUE 8190.0f
 
 // CUDA kernel to test FMA accumulation sequence
 // Creates array A where A[i] = M, A[j] = -M, others = 1.0

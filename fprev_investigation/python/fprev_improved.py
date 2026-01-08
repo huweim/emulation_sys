@@ -3,19 +3,150 @@ from typing import List, Tuple, Set, Dict, Optional, Any
 from dataclasses import dataclass
 import matplotlib.pyplot as plt
 import networkx as nx
+import torch
+import math
 
 # Try to import nvfp for nvfp quantization support
 try:
-    import torch
     import nvfp.ops as ops
     import nvfp.pseudo_quant as pseudo_quant
 
     NVFP_AVAILABLE = True
 except ImportError:
     NVFP_AVAILABLE = False
-    torch = None
     ops = None
     pseudo_quant = None
+
+
+def nvfp4_pseudo_quantize(
+    x: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    assert x.is_cuda, "x must be a CUDA tensor"
+    assert x.dtype in (
+        torch.float,
+        torch.float16,
+        torch.bfloat16,
+    ), f"x.dtype needs to be float, fp16 or bf16 but got {x.dtype}"
+    assert x.ndim >= 1, f"x.ndim needs to be >= 1, but got {x.ndim}"
+    assert (
+        x.shape[-1] % 16 == 0
+    ), f"last dim has to be multiple of 16, but got {x.shape[-1]}"
+    org_shape = x.shape
+    x = x.reshape(-1, org_shape[-1])
+    fp4_weight, weight_scale_interleaved, weight_global_scale = (
+        pseudo_quant.quantize_linear_weight_to_nvfp4(x)
+    )
+    """Dequantize the fp4 tensor back to high precision."""
+    # Two fp4 values are packed into one uint8.
+    assert fp4_weight.dtype == torch.float4_e2m1fn_x2
+    m, packed_k = fp4_weight.shape
+    k = packed_k * 2
+    tensor_f32 = pseudo_quant.unpack_fp4_bytes(fp4_weight)
+    tensor_f32 = tensor_f32.reshape(m, k)
+    weight_scale_interleaved = weight_scale_interleaved.view(torch.float8_e4m3fn)
+    weight_scale_interleaved = pseudo_quant.swizzled_to_linear_128_4(
+        weight_scale_interleaved, m, k
+    )
+
+    return tensor_f32, weight_scale_interleaved, weight_global_scale
+
+
+def torch_add_custom_precision(a, b, precision_bits):
+    a_t = torch.as_tensor(a, dtype=torch.float64)
+    b_t = torch.as_tensor(b, dtype=torch.float64)
+    res = a_t + b_t
+
+    mantissa, exponent = torch.frexp(res)
+    scale = 2.0**precision_bits
+    mantissa_rounded = torch.round(mantissa * scale) / scale
+    final_res = torch.ldexp(mantissa_rounded, exponent)
+
+    return final_res
+
+
+def nvfp4_gemm_simulation(
+    A_val: torch.Tensor,
+    B_val: torch.Tensor,
+    scale_A: torch.Tensor,
+    scale_B: torch.Tensor,
+    alpha: float,
+    out_dtype: torch.dtype = torch.float16,
+):
+    """
+    NVIDIA NVFP4 GEMM Simulation Kernel
+    """
+
+    M, K = A_val.shape
+    N, _ = B_val.shape
+    assert K % 64 == 0, "K must be multiple of 64"
+
+    # A_int, B_int: int64
+    A_int = (A_val * 2).to(torch.int64)
+    B_int = (B_val * 2).to(torch.int64)
+
+    sA_u8 = scale_A.view(torch.uint8).to(torch.int64)
+    sB_u8 = scale_B.view(torch.uint8).to(torch.int64)
+
+    def decode_e4m3(u8_tensor):
+        # Mask 0x78 (01111000) >> 3 -> Exponent
+        exp = (u8_tensor & 0x78) >> 3
+        # Mask 0x07 | 0x08 -> Mantissa (1.MMM -> 1MMM)
+        man = (u8_tensor & 0x07) | 0x08
+        return man, exp
+
+    sA_man, sA_exp = decode_e4m3(sA_u8)
+    sB_man, sB_exp = decode_e4m3(sB_u8)
+
+    n_blocks = K // 64
+
+    # [M/N, Blocks, Group(4), Elements(16)]
+    A_4d = A_int.reshape(M, n_blocks, 4, 16)
+    B_4d = B_int.reshape(N, n_blocks, 4, 16)
+
+    sA_man_3d = sA_man.reshape(M, n_blocks, 4)
+    sA_exp_3d = sA_exp.reshape(M, n_blocks, 4)
+    sB_man_3d = sB_man.reshape(N, n_blocks, 4)
+    sB_exp_3d = sB_exp.reshape(N, n_blocks, 4)
+
+    output_acc = torch.zeros((M, N), dtype=torch.float64, device=A_val.device)
+
+    for b in range(n_blocks):
+        a_blk = A_4d[:, b, :, :]  # [M, 4, 16] (int64)
+        b_blk = B_4d[:, b, :, :]  # [N, 4, 16] (int64)
+
+        # [M, 4, 16] @ [N, 4, 16] -> [M, N, 4]
+        vec_sum_f = torch.einsum("mgk, ngk -> mng", a_blk.float(), b_blk.float())
+
+        vec_sum = vec_sum_f.to(torch.int64)  # [M, N, 4] S10P2
+
+        sa_m = sA_man_3d[:, b, :]
+        sa_e = sA_exp_3d[:, b, :]
+        sb_m = sB_man_3d[:, b, :]
+        sb_e = sB_exp_3d[:, b, :]
+
+        man_prod = sa_m.unsqueeze(1) * sb_m.unsqueeze(0)  # [M, N, 4]
+        exp_sum = sa_e.unsqueeze(1) + sb_e.unsqueeze(0)  # [M, N, 4]
+        val_unshifted = vec_sum * man_prod
+
+        reserve_bits = 16
+        exp_max, _ = exp_sum.max(dim=-1, keepdim=True)  # [M, N, 1]
+
+        dE = exp_max - exp_sum  # [M, N, 4]
+        val_boosted = val_unshifted << reserve_bits
+        val_shifted = val_boosted >> dE
+
+        block_res_int = val_shifted.sum(dim=-1)  # [M, N]
+
+        exponent_real = exp_max.squeeze(-1).float() - 22.0 - reserve_bits
+
+        factor = torch.pow(2.0, exponent_real)
+        output_acc = torch_add_custom_precision(
+            output_acc, block_res_int.double() * factor, 25  # maximum precision
+        )
+
+    final_output = output_acc * alpha
+
+    return final_output.to(out_dtype)
 
 
 @dataclass
@@ -132,7 +263,7 @@ class ImprovedFPRev:
         if not NVFP_AVAILABLE:
             raise ImportError("NVFP is not available. Please install nvfp package.")
 
-        M_VALUE = 57344.0  # ensure 1 is quantized to 1.0
+        M_VALUE = 28672.0  # or 57344.0 ensure 1 is quantized to 1.0
         self.FLOAT4_E2M1_MAX = 6.0
         self.FLOAT8_E4M3_MAX = 448.0
 
@@ -169,6 +300,19 @@ class ImprovedFPRev:
         )
         sum_val_real = output[0, 0].item() / 16.0
 
+        sim_A_fp4, sim_A_scale, sim_A_global = nvfp4_pseudo_quantize(A)
+        sim_B_fp4, sim_B_scale, sim_B_global = nvfp4_pseudo_quantize(B)
+        sim_val = (
+            nvfp4_gemm_simulation(
+                sim_A_fp4,
+                sim_B_fp4,
+                sim_A_scale,
+                sim_B_scale,
+                (1.0 / sim_A_global / sim_B_global).item(),
+                torch.float16,
+            )[0, 0].item()
+            / 16.0
+        )
         # Pseudo quantization: quantize to FP4 and dequantize back to float32
         A_pseudo = pseudo_quant.nvfp4_pseudo_quantize(A)
         B_pseudo = pseudo_quant.nvfp4_pseudo_quantize(B)
@@ -176,7 +320,9 @@ class ImprovedFPRev:
         # Use standard matrix multiplication with pseudo-quantized tensors
         output = torch.matmul(A_pseudo.double(), B_pseudo.double().T).to(torch.float16)
         sum_val_pseudo = output[0, 0].item() / 16.0
-        print(f"i={i}, j={j}, sum_real={sum_val_real}, sum_pseudo={sum_val_pseudo}")
+        print(
+            f"i={i}, j={j}, sum_real={sum_val_real}, sim_val={sim_val},sum_pseudo={sum_val_pseudo}"
+        )
 
         return sum_val_real
 
