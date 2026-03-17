@@ -71,7 +71,7 @@ class QuantLinear(nn.Module):
                 x_q = x_q.double().contiguous()
             else:
                 x_q = x.to(torch.double)
-            print(F.linear(x_q, self.qweight_fp.double(), self.bias).to(x.dtype).mean().item())
+            # print(F.linear(x_q, self.qweight_fp.double(), self.bias).to(x.dtype).mean().item())
             return F.linear(x_q, self.qweight_fp.double(), self.bias).to(x.dtype)
         else:  # "real" or "emulation"
             x_amax = torch.abs(x).max().to(torch.float32)
