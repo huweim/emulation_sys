@@ -42,7 +42,7 @@ Run a baseline PPL (Perplexity) evaluation on the wikitext task using the `lm-ev
 MODEL_PATH=/mnt/model/llama-2-7b-hf
 
 # Run the wikitext with lm-eval
-python -m inference.inference_test_v2 \
+python -m inference.inference_test \
   --model_path /mnt/model/llama-2-7b-hf \
   --task wikitext \
   --batch_size 32
@@ -53,7 +53,7 @@ Run the NVFP quantization fidelity test. This compares the PPL score of a pseudo
 ```shell
 # --- Run 1: Pseudo Quant ---
 # This simulates NVFP4 quantization but performs GEMM in high-precision (BF16/FP16).
-python -m inference.inference_test_v2 \
+python -m inference.inference_test \
   --model_path /mnt/model/llama-2-7b-hf \
   --task wikitext \
   --batch_size 32 \
@@ -63,7 +63,7 @@ python -m inference.inference_test_v2 \
 
 # --- Run 2: Real Quant ---
 # This uses the real low-precision NVFP4 kernels.
-python -m inference.inference_test_v2 \
+python -m inference.inference_test \
   --model_path /mnt/model/llama-2-7b-hf \
   --task wikitext \
   --batch_size 32 \

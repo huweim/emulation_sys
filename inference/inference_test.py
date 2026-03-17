@@ -5,165 +5,191 @@ from collections import defaultdict
 import textwrap
 from tqdm import tqdm
 
-def initialize_backend(backend: str, model_path: str):
-    """
-    根据选择的后端，初始化并返回模型和分词器/采样参数。
-    模型只会被加载一次。
-    """
-    print(f"--- Initializing Backend: {backend.upper()} ---")
-    print(f"--- Loading Model: {model_path} (this may take a while) ---")
-    
-    if backend == 'hf':
-        from transformers import AutoTokenizer, AutoModelForCausalLM
-        
-        torch.manual_seed(42)
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        if device == "cpu":
-            raise RuntimeError("This script requires a CUDA-enabled GPU.")
-            
-        tokenizer = AutoTokenizer.from_pretrained(model_path)
-        model = AutoModelForCausalLM.from_pretrained(
-            model_path,
-            torch_dtype=torch.bfloat16,
-            device_map="auto"
-        )
-        model.to(device)
-        model.eval()
-        print("--- Model Loaded Successfully ---")
-        return model, tokenizer, None # HF doesn't use sampling_params object
-        
-    elif backend == 'vllm':
-        from vllm import LLM, SamplingParams
-        
-        llm = LLM(model=model_path, tensor_parallel_size=1, dtype="bfloat16")
-        
-        # 定义确定性采样参数
-        sampling_params = SamplingParams(
-            temperature=0.0,
-            top_p=1.0,
-            top_k=-1,
-            max_tokens=1024,
-        )
-        print("--- Model Loaded Successfully ---")
-        return llm, None, sampling_params # vLLM uses llm engine and sampling_params
-        
-    else:
-        raise ValueError("Invalid backend selected.")
+import torch
+import torch.nn as nn
+
+from transformers import AutoConfig
+
+from .eval.lighteval_custom import patch
+from .utils.vllm_utils import prepare_vllm_temp_model
+
+from .quant.pre_quant import replace_quant_linear 
+
+from .eval.lighteval_runner_hf import run_lighteval_evaluation
+from .eval.lmeval_runner import run_lm_eval
+from inference.eval.prompt_runner import run_determinism_test
+from .eval.inference import main as lighteval_main
+
+from .models.qwen_vllm.qwen_mxfp import Qwen2ForCausalLM_nvfp
+
+from vllm import ModelRegistry
+ModelRegistry.register_model("Qwen2ForCausalLM_nvfp", Qwen2ForCausalLM_nvfp)
 
 
-def generate(backend: str, prompt: str, model, tokenizer, sampling_params):
-    """
-    执行单次推理生成。
-    """
-    if backend == 'hf':
-        device = model.device
-        inputs = tokenizer(prompt, return_tensors="pt").to(device)
-        generation_kwargs = {
-            "max_new_tokens": 1024,
-            "do_sample": False,
-            # "temperature": 0.0,
-        }
-        outputs = model.generate(**inputs, **generation_kwargs)
-        return tokenizer.decode(outputs[0], skip_special_tokens=True)
-        
-    elif backend == 'vllm':
-        outputs = model.generate([prompt], sampling_params)
-        return outputs[0].prompt + outputs[0].outputs[0].text
+def load_hf_model(model_path: str, dtype: torch.dtype): # Added dtype param
+    from transformers import AutoTokenizer, AutoModelForCausalLM
 
+    torch.manual_seed(42)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    if device == "cpu":
+        raise RuntimeError("This script requires a CUDA-enabled GPU.")
 
-def summarize_results(num_runs: int, baseline_output: str, inconsistencies: dict):
-    """
-    打印最终的实验结果总结。
-    """
-    inconsistent_runs_count = sum(len(runs) for runs in inconsistencies.values())
-    consistent_runs_count = num_runs - inconsistent_runs_count
-    inconsistency_rate = (inconsistent_runs_count / num_runs) * 100 if num_runs > 0 else 0
-
-    print("\n" + "="*80)
-    print(" " * 28 + "FINAL SUMMARY REPORT")
-    print("="*80)
-    print(f"Total Runs Executed: {num_runs}")
-    print(f"✅ Consistent Runs (same as Run 1): {consistent_runs_count}")
-    print(f"❌ Inconsistent Runs (different from Run 1): {inconsistent_runs_count} ({inconsistency_rate:.2f}%)")
-    print("-" * 80)
-
-    print("--- Baseline Output (Generated in Run 1) ---")
-    # 使用 textwrap.indent 美化输出
-    indented_baseline = textwrap.indent(baseline_output, '    ')
-    print(indented_baseline)
-    print("-" * 80)
-
-    if not inconsistencies:
-        print("\n🎉 All runs produced identical, deterministic results!")
-    else:
-        print(f"\n--- Found {len(inconsistencies)} Inconsistent Variation(s) ---")
-        for i, (text, runs) in enumerate(inconsistencies.items()):
-            print(f"\n[ Variation {i+1} ] - Occurred in {len(runs)} runs: {runs}")
-            indented_variation = textwrap.indent(text, '    ')
-            print(indented_variation)
-    
-    print("="*80)
+    tokenizer = AutoTokenizer.from_pretrained(model_path)
+    model = AutoModelForCausalLM.from_pretrained(
+        model_path,
+        torch_dtype=dtype, # Use the passed dtype
+        device_map="auto"
+    )
+    model.to(device)
+    model.eval()
+    return model, tokenizer
 
 
 def main():
     parser = argparse.ArgumentParser(description="Advanced LLM Inference Determinism Test Script")
-    parser.add_argument("--model_path", type=str, default="meta-llama/Llama-3-8B-Instruct")
-    parser.add_argument("--backend", type=str, required=True, choices=['hf', 'vllm'])
-    parser.add_argument("--num-runs", type=int, default=10, help="Number of inference runs to perform.")
-    parser.add_argument("--prompt", type=str, 
-        default=(
-            "You are a supply chain analyst for a company that manufactures high-end electric bicycles. "
-            "A critical shipment of lithium-ion battery packs, originating from a supplier in South Korea, "
-            "is delayed by 3 weeks due to unforeseen port congestion in Singapore. The bicycles are "
-            "assembled in Germany and are scheduled for a major product launch in France in 6 weeks. "
-            "The battery packs are the only missing component.\n\n"
-            "Please outline a detailed plan of action. Structure your response with clear headings "
-            "for each of the following sections:\n"
-            "1. Immediate Information Verification: What are the first steps to confirm the delay and the new timeline?\n"
-            "2. Alternative Logistics Analysis: What alternative shipping options should be explored (e.g., air freight vs. rerouting sea freight), and what are their cost-benefit trade-offs?\n"
-            "3. Production Schedule Adjustment: How should the assembly line schedule in Germany be adapted to minimize downtime?\n"
-            "4. Stakeholder Communication Plan: What is the communication strategy for internal teams (Marketing, Sales, Leadership) and potentially external partners?"
-        ),        help="The prompt to use for inference."
-    )
+    parser.add_argument("--model_path", type=str, default="/mnt/model/llama-2-7b-hf")
+    parser.add_argument("--dtype", type=str, default="bf16", choices=["bf16", "fp16", "fp32"])
+    parser.add_argument("--max_new_tokens", type=int, default=512, help="Max tokens for prompt generation")
+    parser.add_argument("--seed", type=int, default=42)
+
+    # --- Eval flags ---
+    parser.add_argument("--tasks", type=str, default=None, help='Task name(s) for evaluation (e.g., "AIME-90" or "arc_easy,hellaswag")')
+    parser.add_argument("--eval_lib", type=str, default="lm-eval", choices=["lm-eval", "lighteval"],
+                        help="Evaluation library to use. 'lighteval' handles custom reasoning tasks.")
+    parser.add_argument("--backend", type=str, default="hf", choices=["hf", "vllm"], help="Specify the conceptual backend (hf required for quantization tests)")
+    parser.add_argument("--batch_size", type=int, default=1, help="Evaluation batch size (default: 1)") # Changed default to 1
+    parser.add_argument("--num_fewshot", type=int, default=0, help="Number of few-shot examples")
+    parser.add_argument("--limit", type=int, default=0, help="Limit eval samples (0 for no limit)") # Changed default
+
+    # --- Prompting flags ---
+    parser.add_argument("--use_prompt", action="store_true", help="Generate based on single prompt (if no tasks specified, default False)")
+    parser.add_argument("--num-runs", type=int, default=1, help="Number of inference runs for determinism test")
+    parser.add_argument("--prompt", type=str, default=(
+        "You are a supply chain analyst for a company that manufactures high-end electric bicycles. "
+        "A critical shipment of lithium-ion battery packs, originating from a supplier in South Korea, "
+        "is delayed by 3 weeks due to unforeseen port congestion in Singapore. The bicycles are "
+        "assembled in Germany and are scheduled for a major product launch in France in 6 weeks. "
+        "The battery packs are the only missing component.\n\n"
+        "Please outline a detailed plan of action. Structure your response with clear headings "
+        "for each of the following sections:\n"
+        "1. Immediate Information Verification: What are the first steps to confirm the delay and the new timeline?\n"
+        "2. Alternative Logistics Analysis: What alternative shipping options should be explored (e.g., air freight vs. rerouting sea freight), and what are their cost-benefit trade-offs?\n"
+        "3. Production Schedule Adjustment: How should the assembly line schedule in Germany be adapted to minimize downtime?\n"
+        "4. Stakeholder Communication Plan: What is the communication strategy for internal teams (Marketing, Sales, Leadership) and potentially external partners?"
+    ))
+    # === quantization flags ===
+    parser.add_argument("--quantize", action="store_true", help="wrap Linear with fake-quant QuantLinear")
+    parser.add_argument("--quant-mode", type=str, default="pseudo", choices=["pseudo", "real", "emulation"],
+                        help="Use 'pseudo' (fake-quant + F.linear), 'real' (int GEMM API), or 'emulation' (our simulator)")
+    parser.add_argument("--w-bit", type=int, default=4, help="weight bitwidth, e.g., 4 for W4")
+    parser.add_argument("--a-bit", type=int, default=4, help="activation bitwidth, e.g., 4 for A4")
+    parser.add_argument("--q-group-size", type=int, default=16, help="group size along in_features for weight per-group quant")
+    parser.add_argument("--zero-point", action="store_true", help="use asymmetric (with zero-point) quant; default symmetric")
+    parser.add_argument("--nvfp", action="store_true", help="use nvfp quant")
+    parser.add_argument("--fp8", action="store_true", help="use fp8 quant")
 
     args = parser.parse_args()
 
-    # 1. 初始化，只加载一次模型
-    model, tokenizer, sampling_params = initialize_backend(args.backend, args.model_path)
+    # --- 1) Load model and tokenizer ---
+    model, tokenizer = None, None
+    load_model_needed = (args.backend == 'hf') or (args.eval_lib == 'lm-eval') or args.use_prompt
 
-    # Warm-up run for vLLM to JIT kernels
-    if args.backend == 'vllm':
-        print("\n" + "="*80)
-        print("--- Performing 1 warm-up run (vLLM) to JIT kernels... ---")
-        _ = generate(args.backend, "Warm-up run", model, tokenizer, sampling_params)
-        print("--- Warm-up complete. Starting determinism test. ---")
-    
-    baseline_output = None
-    # 使用 defaultdict(list) 更方便地收集不一致的轮次
-    inconsistencies = defaultdict(list)
-    
-    print("\n" + "="*80)
-    print(f"Starting Determinism Test: {args.num_runs} runs on '{args.backend.upper()}' backend.")
-    print("="*80)
-    
-    nums_output_mismatch = 0
-    # 2. 循环运行推理
-    for i in tqdm(range(1, args.num_runs + 1), desc="Running Inference"):
-        print(f"\n--- Running Iteration {i}/{args.num_runs} ---")
-        current_output = generate(args.backend, args.prompt, model, tokenizer, sampling_params)
-        
-        # 3. 对比结果
-        if i == 1:
-            baseline_output = current_output
+    if load_model_needed:
+        print(f"[Main] Loading HF model into memory for {args.backend} backend...")
+        model_dtype = torch.bfloat16 if args.dtype == 'bf16' else (torch.float16 if args.dtype == 'fp16' else torch.float32)
+        model, tokenizer = load_hf_model(args.model_path, model_dtype)
+    else:
+        print("[Main] Model loading deferred to vLLM backend.")
+
+    # model_path_vllm is the real path to lighteval_main
+    model_path_vllm = args.model_path 
+    temp_vllm_dir = None
+
+    # --- 2) (Optional) Apply Quantization ---
+    # The `model` object is modified in-place
+    if args.quantize:
+        if args.backend == "vllm" and args.tasks and args.eval_lib == "lighteval":
+            if args.tasks in ["AIME-2025", "AIME-90","MATH-500", "GSM8K", "GPQA-Diamond", "LiveCodeBench"]:
+                config = AutoConfig.from_pretrained(args.model_path)
+                name = config.architectures[0]
+                if not name.endswith("_nvfp"):
+                    name += "_nvfp"
+                
+                if name != "Qwen2ForCausalLM_nvfp":
+                    raise Exception(f"{name} is not supported yet")
+                
+                vllm_model_type_override = name
+
+                # The value of `quant_method` must be the same as `NVFPQuantConfig @register_quantization_config`
+                quant_params = {
+                    "quant_method": "nvfp_quant", # TODO: Support other quant method [FP8, INT8, INT4]
+                    "w_bit": args.w_bit,
+                    "a_bit": args.a_bit,
+                    "group_size": args.q_group_size,
+                    "quant_mode": args.quant_mode,
+                    "use_zero_point": args.zero_point,
+                }
+                temp_vllm_dir = prepare_vllm_temp_model(args.model_path, vllm_model_type_override, quant_params)
+                model_path_vllm = temp_vllm_dir # Update the path used by vLLM
+                
+        elif model is not None:
+            if args.w_bit is None:
+                raise ValueError("--quantize is set but --w-bit is None")
+            # a_bit can be None (for weight-only quant) 
+            q_config = {
+                "q_group_size": args.q_group_size,
+                "mode": args.quant_mode,   # Pass the run mode in
+            }
+            replace_quant_linear(
+                model=model,
+                w_bit=args.w_bit,
+                a_bit=args.a_bit,
+                q_config=q_config,
+                use_zero_point=args.zero_point,
+                init_only=False,
+                nvfp=args.nvfp,
+                fp8=args.fp8,
+            )
+            print("[Main] Quantization applied.")
         else:
-            if current_output != baseline_output:
-                inconsistencies[current_output].append(i)
-                nums_output_mismatch += 1
+            print("[Main] Quantization requested, but no action (eval/prompt) requires the model.")
 
-        print(f"Total Mismatch Count: {nums_output_mismatch}")
-
-    # 4. 总结并输出报告
-    summarize_results(args.num_runs, baseline_output, inconsistencies)
+    if args.tasks:
+        if args.eval_lib == "lighteval":
+            print(f"[Main] Using 'lighteval' for task: {args.tasks}")
+            if args.backend == "hf":
+                run_lighteval_evaluation(
+                    model=model,
+                    model_path=args.model_path,
+                    task_name=args.tasks,
+                    limit=args.limit if args.limit > 0 else None,
+                    num_fewshot=args.num_fewshot,
+                    batch_size=args.batch_size
+                )
+            elif args.backend == "vllm":
+                ## vllm backend
+                lighteval_main(model_path_vllm, args.tasks)
+        else:
+            # lm-eval path
+            print(f"[Main] Using legacy 'lm-eval' library for tasks: {args.tasks}")
+            run_lm_eval(
+                args=args,
+                model=model,
+                tokenizer=tokenizer,
+                tasks=args.tasks,
+                batch_size=args.batch_size,
+                num_fewshot=args.num_fewshot,
+                limit=args.limit if args.limit > 0 else None,
+            )
+    # --- 4) (Optional) Run Prompting / Determinism Test ---
+    if args.use_prompt:
+        print(f"[Main Runner] Starting prompt generation / determinism test...")
+        run_determinism_test(
+            args=args, # Pass args for prompt, num_runs, max_new_tokens
+            model=model,
+            tokenizer=tokenizer
+        )
+    
 
 if __name__ == "__main__":
     main()

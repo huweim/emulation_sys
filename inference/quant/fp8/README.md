@@ -4,7 +4,7 @@ pip install -e .
 # --- Run 1: Pseudo Quant ---
 # This simulates FP8 quantization but performs GEMM in float32.
 # PPL on wikitext: 5.484800338745117
-python -m inference.inference_test_v2 \
+python -m inference.inference_test \
   --model_path /mnt/model/llama-2-7b-hf \
   --task wikitext \
   --dtype fp16 \
@@ -16,7 +16,7 @@ python -m inference.inference_test_v2 \
 # --- Run 2: Real Quant ---
 # This dequant fp8 tp bf16 and gemm(fp8 gemm is todo)
 #PPL on wikitext: 5.488485336303711
-python -m inference.inference_test_v2 \
+python -m inference.inference_test \
   --model_path /mnt/model/llama-2-7b-hf \
   --task wikitext \
   --dtype fp16 \

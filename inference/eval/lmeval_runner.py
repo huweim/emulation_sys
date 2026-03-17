@@ -19,7 +19,8 @@ def run_lm_eval(args, model, tokenizer, tasks: str, batch_size: int, num_fewshot
         
         testenc = testenc.input_ids.to(model.device)
         nsamples = testenc.numel() // model.seqlen
-        # nsamples = 10
+        if limit:
+            nsamples = limit
         model = model.eval()
         nlls = []
         for i in tqdm(range(nsamples), desc="evaluating..."):
