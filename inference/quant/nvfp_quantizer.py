@@ -1,3 +1,5 @@
+import os
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -50,7 +52,10 @@ class QuantLinear(nn.Module):
                 
                 # Create emulation kernel for deterministic modeling
                 if self.mode == "emulation":
-                    self.emulation_kernel = EmulationKernel.for_rtx_5090()
+                    self.enable_emulation_profile = os.getenv("NVFP_EMULATION_PROFILE", "0").lower() in {"1", "true", "yes", "on"}
+                    self.enable_emulation_triton_stage3 = os.getenv("NVFP_EMULATION_TRITON_STAGE3", "0").lower() in {"1", "true", "yes", "on"}
+                    self.emulation_kernel = EmulationKernel.for_rtx_5090(enable_profile=self.enable_emulation_profile)
+                    self.emulation_kernel.use_triton_stage3 = self.enable_emulation_triton_stage3
 
         if self.bias is not None and isinstance(self.bias, torch.Tensor):
             self.bias = self.bias.to(torch.double)

@@ -1,12 +1,6 @@
+import os
 import torch
 import argparse
-import time
-from collections import defaultdict
-import textwrap
-from tqdm import tqdm
-
-import torch
-import torch.nn as nn
 
 from transformers import AutoConfig
 
@@ -21,9 +15,66 @@ from inference.eval.prompt_runner import run_determinism_test
 from .eval.inference import main as lighteval_main
 
 from .models.qwen_vllm.qwen_mxfp import Qwen2ForCausalLM_nvfp
+from .quant.nvfp_kernel.emulation.core import MMAEngine
 
 from vllm import ModelRegistry
 ModelRegistry.register_model("Qwen2ForCausalLM_nvfp", Qwen2ForCausalLM_nvfp)
+
+
+def _print_emulation_profile_report(profile_stats: dict):
+    if not profile_stats:
+        print("[Emulation Profile] No profile data collected.")
+        return
+
+    total_ms = profile_stats.get("emulation.total", 0.0)
+    if total_ms <= 0:
+        print("[Emulation Profile] Invalid total time, raw stats:")
+        for key in sorted(profile_stats):
+            print(f"  - {key}: {profile_stats[key]:.3f} ms")
+        return
+
+    print("\n[Emulation Profile] Detailed CUDA-synchronized time breakdown")
+    print(f"[Emulation Profile] Total: {total_ms:.3f} ms")
+
+    summary_groups = [
+        ("preprocess_b.total", "Preprocess B"),
+        ("preprocess_a.total", "Preprocess A"),
+        ("chunk.total", "All Chunks"),
+        ("post.concat", "Post Concat"),
+        ("post.cleanup", "Post Cleanup"),
+        ("step5.total", "Step5 Final Scale/Cast"),
+    ]
+    print("[Emulation Profile] High-level groups:")
+    for key, label in summary_groups:
+        val = profile_stats.get(key, 0.0)
+        pct = (val / total_ms * 100.0) if total_ms > 0 else 0.0
+        print(f"  - {label:<28} {val:>10.3f} ms ({pct:>6.2f}%)")
+
+    step_groups = [
+        ("step1.total", "Step1 Inner MMA"),
+        ("step2.total", "Step2 Scale Apply"),
+        ("step3.total", "Step3 Reduction"),
+        ("step4.total", "Step4 Accumulate"),
+    ]
+    print("[Emulation Profile] Core pipeline steps:")
+    for key, label in step_groups:
+        val = profile_stats.get(key, 0.0)
+        pct = (val / total_ms * 100.0) if total_ms > 0 else 0.0
+        print(f"  - {label:<28} {val:>10.3f} ms ({pct:>6.2f}%)")
+
+    print("[Emulation Profile] Stage3 detailed keys:")
+    stage3_keys = [k for k in profile_stats.keys() if k.startswith("stage3.")]
+    for key in sorted(stage3_keys):
+        val = profile_stats[key]
+        pct = (val / total_ms * 100.0) if total_ms > 0 else 0.0
+        print(f"  - {key:<28} {val:>10.3f} ms ({pct:>6.2f}%)")
+
+    print("[Emulation Profile] Stage4 detailed keys:")
+    stage4_keys = [k for k in profile_stats.keys() if k.startswith("step4.")]
+    for key in sorted(stage4_keys):
+        val = profile_stats[key]
+        pct = (val / total_ms * 100.0) if total_ms > 0 else 0.0
+        print(f"  - {key:<28} {val:>10.3f} ms ({pct:>6.2f}%)")
 
 
 def load_hf_model(model_path: str, dtype: torch.dtype): # Added dtype param
@@ -59,7 +110,7 @@ def main():
     parser.add_argument("--backend", type=str, default="hf", choices=["hf", "vllm"], help="Specify the conceptual backend (hf required for quantization tests)")
     parser.add_argument("--batch_size", type=int, default=1, help="Evaluation batch size (default: 1)") # Changed default to 1
     parser.add_argument("--num_fewshot", type=int, default=0, help="Number of few-shot examples")
-    parser.add_argument("--limit", type=int, default=0, help="Limit eval samples (0 for no limit)") # Changed default
+    parser.add_argument("--limit", type=int, default=1, help="Limit eval samples (0 for no limit)") # Changed default
 
     # --- Prompting flags ---
     parser.add_argument("--use_prompt", action="store_true", help="Generate based on single prompt (if no tasks specified, default False)")
@@ -87,8 +138,16 @@ def main():
     parser.add_argument("--zero-point", action="store_true", help="use asymmetric (with zero-point) quant; default symmetric")
     parser.add_argument("--nvfp", action="store_true", help="use nvfp quant")
     parser.add_argument("--fp8", action="store_true", help="use fp8 quant")
+    parser.add_argument("--emulation-profile", action="store_true", help="enable detailed CUDA-time profile for emulation mode")
+    parser.add_argument("--emulation-triton-stage3", action="store_true", help="enable Triton kernel path for emulation Step3")
 
     args = parser.parse_args()
+
+    if args.emulation_profile:
+        os.environ["NVFP_EMULATION_PROFILE"] = "1"
+        MMAEngine.reset_profile_stats()
+    if args.emulation_triton_stage3:
+        os.environ["NVFP_EMULATION_TRITON_STAGE3"] = "1"
 
     # --- 1) Load model and tokenizer ---
     model, tokenizer = None, None
@@ -189,6 +248,10 @@ def main():
             model=model,
             tokenizer=tokenizer
         )
+
+    if args.emulation_profile and args.quantize and args.quant_mode == "emulation":
+        profile_stats = MMAEngine.get_last_profile_stats()
+        _print_emulation_profile_report(profile_stats)
     
 
 if __name__ == "__main__":
