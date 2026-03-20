@@ -140,6 +140,7 @@ def main():
     parser.add_argument("--fp8", action="store_true", help="use fp8 quant")
     parser.add_argument("--emulation-profile", action="store_true", help="enable detailed CUDA-time profile for emulation mode")
     parser.add_argument("--emulation-triton-stage3", action="store_true", help="enable Triton kernel path for emulation Step3")
+    parser.add_argument("--emulation-triton-stage4", action="store_true", help="enable Triton kernel path for emulation Step4")
 
     args = parser.parse_args()
 
@@ -148,6 +149,8 @@ def main():
         MMAEngine.reset_profile_stats()
     if args.emulation_triton_stage3:
         os.environ["NVFP_EMULATION_TRITON_STAGE3"] = "1"
+    if args.emulation_triton_stage4:
+        os.environ["NVFP_EMULATION_TRITON_STAGE4"] = "1"
 
     # --- 1) Load model and tokenizer ---
     model, tokenizer = None, None
