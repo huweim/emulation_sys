@@ -79,11 +79,11 @@ def int4_pseudo_emulation_gemm(
     assert q_a.ndim == 2 and q_b.ndim == 2
     assert q_a.shape[1] == q_b.shape[1], "q_a and q_b must share K dimension"
 
-    q_a_f = q_a.to(torch.float32)
-    q_b_f = q_b.to(torch.float32)
+    q_a_f = q_a.to(out_dtype)
+    q_b_f = q_b.to(out_dtype)
 
-    a_scale = a_scales.reshape(-1, 1).to(device=q_a_f.device, dtype=torch.float32)
-    b_scale = b_scales.reshape(-1, 1).to(device=q_b_f.device, dtype=torch.float32)
+    a_scale = a_scales.reshape(-1, 1).to(device=q_a_f.device, dtype=out_dtype)
+    b_scale = b_scales.reshape(-1, 1).to(device=q_b_f.device, dtype=out_dtype)
 
     assert q_a_f.shape[0] == a_scale.shape[0], "q_a rows must match a_scales"
     assert q_b_f.shape[0] == b_scale.shape[0], "q_b rows must match b_scales"
