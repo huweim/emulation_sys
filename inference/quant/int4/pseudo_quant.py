@@ -62,3 +62,49 @@ def pseudo_quantize_linear_weight_to_int4(
         dequant_dtype=dequant_dtype,
     )
     return w_deq, scales
+
+
+def int4_pseudo_emulation_gemm(
+    q_a: torch.Tensor,
+    q_b: torch.Tensor,
+    a_scales: torch.Tensor,
+    b_scales: torch.Tensor,
+    *,
+    out_dtype: torch.dtype = torch.float32,
+) -> torch.Tensor:
+    """
+    Emulation path: emulate real int4 GEMM math in fp32 from precomputed int4 q.
+    - y = (q_a @ q_b.T) * (a_scale * b_scale^T)
+    """
+    assert q_a.ndim == 2 and q_b.ndim == 2
+    assert q_a.shape[1] == q_b.shape[1], "q_a and q_b must share K dimension"
+
+    q_a_f = q_a.to(torch.float32)
+    q_b_f = q_b.to(torch.float32)
+
+    a_scale = a_scales.reshape(-1, 1).to(device=q_a_f.device, dtype=torch.float32)
+    b_scale = b_scales.reshape(-1, 1).to(device=q_b_f.device, dtype=torch.float32)
+
+    assert q_a_f.shape[0] == a_scale.shape[0], "q_a rows must match a_scales"
+    assert q_b_f.shape[0] == b_scale.shape[0], "q_b rows must match b_scales"
+
+    c_q = q_a_f @ q_b_f.t()
+    scale_outer = a_scale @ b_scale.t()
+    y = c_q * scale_outer
+    return y.to(out_dtype)
+
+
+def int4_unpack(packed_q: torch.Tensor, cols_src: int) -> torch.Tensor:
+    """
+    Unpack uint8-packed signed int4 values to int8 tensor with shape [rows, cols_src].
+    """
+    assert packed_q.ndim == 2, "packed_q must be [rows, cols_dst]"
+    assert packed_q.dtype == torch.uint8, "packed_q must be torch.uint8"
+    assert cols_src >= 0, "cols_src must be non-negative"
+
+    low = (packed_q & 0x0F).to(torch.int16)
+    high = ((packed_q >> 4) & 0x0F).to(torch.int16)
+    pairs = torch.stack((low, high), dim=-1).reshape(packed_q.shape[0], -1)
+    pairs = pairs[:, :cols_src]
+    signed = torch.where(pairs >= 8, pairs - 16, pairs)
+    return signed.to(torch.int8)

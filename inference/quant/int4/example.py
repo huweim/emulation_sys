@@ -45,6 +45,15 @@ def main() -> None:
     print("\n[Pseudo] output shape:", tuple(out_pseudo.shape))
     print("[Pseudo] output sample:\n", out_pseudo[:3, :3])
 
+    # -------- Pseudo emulation GEMM path (dequant after GEMM, use unpacked q) --------
+    a_q_unpacked = pseudo_quant.int4_unpack(a_q, cols_src=k)
+    b_q_unpacked = pseudo_quant.int4_unpack(b_q, cols_src=k)
+    out_emul = pseudo_quant.int4_pseudo_emulation_gemm(
+        a_q_unpacked, b_q_unpacked, a_s, b_s, out_dtype=torch.float16
+    )
+    print("\n[Emul GEMM] output shape:", tuple(out_emul.shape))
+    print("[Emul GEMM] output sample:\n", out_emul[:3, :3])
+
     # -------- Compare --------
     diff = out_real.float() - out_pseudo.float()
     abs_diff = diff.abs()
@@ -54,11 +63,18 @@ def main() -> None:
     print("mean abs:", abs_diff.mean().item())
     print("rmse:", torch.sqrt((diff * diff).mean()).item())
 
-    # Row-wise top-k analysis
+    diff_emul = out_real.float() - out_emul.float()
+    abs_diff_emul = diff_emul.abs()
+    print("\n=== Error stats (real - emul) ===")
+    print("max abs:", abs_diff_emul.max().item())
+    print("mean abs:", abs_diff_emul.mean().item())
+    print("rmse:", torch.sqrt((diff_emul * diff_emul).mean()).item())
+
+    # Row-wise top-k analysis (for original pseudo path)
     row_max = abs_diff.max(dim=1).values
     topk = min(5, row_max.numel())
     vals, idx = torch.topk(row_max, k=topk)
-    print(f"\nTop-{topk} rows by max abs error:")
+    print(f"\nTop-{topk} rows by max abs error (real - pseudo):")
     for i in range(topk):
         r = idx[i].item()
         print(f"  row {r:3d}: max_abs={vals[i].item():.6f}, mean_abs={abs_diff[r].mean().item():.6f}")

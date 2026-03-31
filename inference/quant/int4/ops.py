@@ -73,6 +73,3 @@ def int4_packed_linear(
         32,
     )
     return out.to(out_dtype)
-
-
-## Backwards-compat alias removed: use sym_int4_quant directly.
