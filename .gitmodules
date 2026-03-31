@@ -1,3 +1,6 @@
 [submodule "inference/quant/nvfp_kernel"]
 	path = inference/quant/nvfp_kernel
 	url = https://github.com/SubSir/nvfp_kernel
+[submodule "inference/quant/int4/third_party/cutlass"]
+	path = inference/quant/int4/third_party/cutlass
+	url = https://github.com/NVIDIA/cutlass.git

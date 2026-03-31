@@ -1,10 +1,24 @@
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
 import torch
 
-import int4.ops as ops
-import int4.pseudo_quant as pseudo_quant
+try:
+    # Preferred: run from repo root, import as a package.
+    from inference.quant.int4 import ops, pseudo_quant  # type: ignore
+except ModuleNotFoundError:
+    # Fallback: allow `python example.py` from this directory.
+    repo_root = Path(__file__).resolve().parents[3]
+    sys.path.insert(0, str(repo_root))
+    from inference.quant.int4 import ops, pseudo_quant  # type: ignore
 
 
 def main() -> None:
+    if not torch.cuda.is_available():
+        raise RuntimeError("CUDA is required to run this INT4 example.")
+
     torch.manual_seed(23)
     torch.cuda.manual_seed(23)
     torch.cuda.manual_seed_all(23)
@@ -16,15 +30,16 @@ def main() -> None:
 
     # -------- Real quant path --------
     a_q, a_s = ops.sym_int4_quant(a)
-    b_q, b_s = ops.quantize_linear_weight_to_int4(b)
+    b_q, b_s = ops.sym_int4_quant(b)
     out_real = ops.int4_packed_linear(a_q, b_q, a_s, b_s, out_dtype=torch.float16)
 
     print("[Real] output shape:", tuple(out_real.shape))
     print("[Real] output sample:\n", out_real[:3, :3])
 
     # -------- Pseudo quant path --------
-    a_pseudo = pseudo_quant.int4_pseudo_quantize(a, dequant_dtype=torch.float32)
-    b_pseudo = pseudo_quant.int4_pseudo_quantize(b, dequant_dtype=torch.float32)
+    # Use scales from the real quant path so the comparison is input-aligned.
+    a_pseudo = pseudo_quant.int4_pseudo_quantize(a, scales=a_s, dequant_dtype=torch.float32)
+    b_pseudo = pseudo_quant.int4_pseudo_quantize(b, scales=b_s, dequant_dtype=torch.float32)
     out_pseudo = (a_pseudo @ b_pseudo.t()).to(torch.float16)
 
     print("\n[Pseudo] output shape:", tuple(out_pseudo.shape))
@@ -47,11 +62,6 @@ def main() -> None:
     for i in range(topk):
         r = idx[i].item()
         print(f"  row {r:3d}: max_abs={vals[i].item():.6f}, mean_abs={abs_diff[r].mean().item():.6f}")
-
-    # -------- Dequantized real weight (for emulation/layout use) --------
-    b_deq = ops.dequantize_int4_weight_to_high_precision(b_q, b_s, dtype=torch.float32)
-    print("\n[Dequant weight] shape:", tuple(b_deq.shape), "dtype:", b_deq.dtype)
-    print("[Dequant weight] sample:\n", b_deq[:2, :8])
 
 
 if __name__ == "__main__":

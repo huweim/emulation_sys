@@ -17,6 +17,7 @@ def _compute_row_scales(x_2d: torch.Tensor, clip_ratio: float = 1.0) -> torch.Te
 def int4_pseudo_quantize(
     x: torch.Tensor,
     scales: torch.Tensor | None = None,
+    q: torch.Tensor | None = None,
     clip_ratio: float = 1.0,
     dequant_dtype: torch.dtype = torch.float32,
 ) -> torch.Tensor:
@@ -32,9 +33,15 @@ def int4_pseudo_quantize(
     else:
         scale_2d = scales.reshape(-1, 1).to(device=x.device, dtype=torch.float32)
 
-    q = torch.round(x_f / scale_2d)
-    q = torch.clamp(q, -8, 7)
-    deq = q * scale_2d
+    if q is None:
+        q_f = torch.round(x_f / scale_2d)
+        q_f = torch.clamp(q_f, -8, 7)
+    else:
+        # Use provided q (already computed elsewhere) to ensure identical inputs.
+        q_f = q.reshape(x_2d.shape).to(device=x.device, dtype=torch.float32)
+        q_f = torch.clamp(q_f, -8, 7)
+
+    deq = q_f * scale_2d
     return deq.reshape(*shape_excl_last, x.shape[-1]).to(dequant_dtype)
 
 
