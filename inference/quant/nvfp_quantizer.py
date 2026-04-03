@@ -42,15 +42,20 @@ class QuantLinear(nn.Module):
                 self.FLOAT8_E4M3_MAX = 448.0
                 w_amax = torch.abs(W).max().to(torch.float32)
                 w_global_scale = self.FLOAT8_E4M3_MAX * self.FLOAT4_E2M1_MAX / w_amax
-                w_fp4, scale_w_fp4 = ops.scaled_fp4_quant(W, w_global_scale)
-                self.register_buffer("w_fp4", w_fp4)
-                self.register_buffer("w_scale_fp4", scale_w_fp4)
-                self.w_global_scale = w_global_scale
-                self.qweight_fp = None  # not used in real mode
+                #
+                if self.mode == "real":
+                    print("ops.scaled_fp4_quant")
+                    w_fp4, scale_w_fp4 = ops.scaled_fp4_quant(W, w_global_scale)
+                    
                 
                 # Create emulation kernel for deterministic modeling
                 if self.mode == "emulation":
+                    w_fp4, scale_w_fp4, w_global_scale = pseudo_quant.quantize_linear_weight_to_nvfp4(W)
                     self.emulation_kernel = EmulationKernel.for_rtx_5090()
+                self.register_buffer("w_fp4", w_fp4)
+                self.register_buffer("w_scale_fp4", scale_w_fp4)
+                self.w_global_scale = w_global_scale
+                self.qweight_fp = None  # not used in real mode                 
 
         if self.bias is not None and isinstance(self.bias, torch.Tensor):
             self.bias = self.bias.to(torch.double)
@@ -68,15 +73,19 @@ class QuantLinear(nn.Module):
         if self.mode == "pseudo":
             if self.a_bit is not None and self.a_bit < 16:
                 x_q = pseudo_quant.nvfp4_pseudo_quantize(x)
-                x_q = x_q.double().contiguous()
+                # x_q = x_q.double().contiguous()
+                x_q = x_q.float().contiguous()
             else:
                 x_q = x.to(torch.double)
             # print(F.linear(x_q, self.qweight_fp.double(), self.bias).to(x.dtype).mean().item())
-            return F.linear(x_q, self.qweight_fp.double(), self.bias).to(x.dtype)
+            return F.linear(x_q, self.qweight_fp.float(), self.bias).to(x.dtype)
         else:  # "real" or "emulation"
             x_amax = torch.abs(x).max().to(torch.float32)
             x_global_scale = self.FLOAT8_E4M3_MAX * self.FLOAT4_E2M1_MAX / x_amax
-            x_fp4, scale_x_fp4 = ops.scaled_fp4_quant(x, x_global_scale)
+            if self.mode == "real":
+                x_fp4, scale_x_fp4 = ops.scaled_fp4_quant(x, x_global_scale)
+            else:  # "emulation"
+                x_fp4, scale_x_fp4, x_global_scale = pseudo_quant.quantize_linear_weight_to_nvfp4(x)
 
             alpha = 1.0 / (x_global_scale * self.w_global_scale)
             if self.mode == "real":
