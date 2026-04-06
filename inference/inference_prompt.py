@@ -141,6 +141,11 @@ Examples:
                         help="Weight bitwidth (default: 4)")
     parser.add_argument("--a-bit", type=int, default=4,
                         help="Activation bitwidth (default: 4)")
+    parser.add_argument(
+        "--use-triton-emu",
+        action="store_true",
+        help="Use Triton-accelerated emulation path when --quant-mode emulation",
+    )
     
     args = parser.parse_args()
     
@@ -167,10 +172,13 @@ Examples:
             print("[Quant] Note: 'real' mode requires RTX 5090 (sm_120a)")
         elif args.quant_mode == "emulation":
             print("[Quant] Note: 'emulation' mode works on any GPU (A100, H100, etc.)")
+            if args.use_triton_emu:
+                print("[Quant] Triton emulation acceleration: enabled")
         
         q_config = {
             "q_group_size": 16,
             "mode": args.quant_mode,
+            "use_triton": bool(args.use_triton_emu),
         }
         
         replace_quant_linear(
