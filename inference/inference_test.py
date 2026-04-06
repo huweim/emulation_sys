@@ -87,6 +87,8 @@ def main():
     parser.add_argument("--zero-point", action="store_true", help="use asymmetric (with zero-point) quant; default symmetric")
     parser.add_argument("--nvfp", action="store_true", help="use nvfp quant")
     parser.add_argument("--fp8", action="store_true", help="use fp8 quant")
+    parser.add_argument("--use-triton-emu", action="store_true",
+                        help="Use Triton-accelerated emulation path (HF backend)")
 
     args = parser.parse_args()
 
@@ -139,6 +141,7 @@ def main():
             q_config = {
                 "q_group_size": args.q_group_size,
                 "mode": args.quant_mode,   # Pass the run mode in
+                "use_triton": bool(args.use_triton_emu),
             }
             replace_quant_linear(
                 model=model,
