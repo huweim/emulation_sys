@@ -14,6 +14,7 @@ class QuantLinear(nn.Module):
         group_size: int = 32,
         use_zero_point: bool = False,
         mode: str = "pseudo",  # "pseudo" or "real"
+        use_triton: bool = False,
     ):
         super().__init__()
         assert mode in ("pseudo", "real", "emulation"), "mode must be 'pseudo', 'real' or 'emulation'"
@@ -30,6 +31,7 @@ class QuantLinear(nn.Module):
         self.group_size = group_size
         self.use_zero_point = use_zero_point
         self.mode = mode
+        self.use_triton = use_triton
         self._nvfp_ops = None
         self._quant_ops = None
 
@@ -61,7 +63,9 @@ class QuantLinear(nn.Module):
                     W, w_global_scale
                 )
                 if self.mode == "emulation":
-                    self.emulation_kernel = EmulationKernel.for_rtx_5090()
+                    self.emulation_kernel = EmulationKernel.for_rtx_5090(
+                        use_triton=self.use_triton
+                    )
 
                 self.register_buffer("w_fp4", w_fp4)
                 self.register_buffer("w_scale_fp4", scale_w_fp4)
@@ -73,9 +77,16 @@ class QuantLinear(nn.Module):
 
     @classmethod
     def from_linear(
-        cls, lin, w_bit, a_bit, group_size=32, use_zero_point=False, mode="pseudo"
+        cls,
+        lin,
+        w_bit,
+        a_bit,
+        group_size=32,
+        use_zero_point=False,
+        mode="pseudo",
+        use_triton=False,
     ):
-        return cls(lin, w_bit, a_bit, group_size, use_zero_point, mode)
+        return cls(lin, w_bit, a_bit, group_size, use_zero_point, mode, use_triton)
 
     def forward(self, x):
         original_shape_prefix = x.shape[:-1]

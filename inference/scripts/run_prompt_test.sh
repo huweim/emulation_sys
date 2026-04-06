@@ -20,3 +20,10 @@ python -m inference.inference_prompt \
     --model_path /mnt/model/llama-2-7b-hf \
     --prompt "Your prompt here" \
     --quant-mode emulation
+
+python -m inference.inference_prompt \
+  --model_path /mnt/model/llama-2-7b-hf \
+  --prompt "Your prompt here" \
+  --quant-mode emulation \
+  --use-triton-emu \
+  --max_new_tokens 5

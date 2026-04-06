@@ -64,6 +64,7 @@ def replace_quant_linear(
 
     layers = get_blocks(model)
     group_size = q_config.get("q_group_size", 32)
+    use_triton = q_config.get("use_triton", False)
 
     for i in tqdm(range(len(layers)), desc="replace quant linear...(init_only=%s)" % init_only):
         layer = layers[i]
@@ -73,7 +74,15 @@ def replace_quant_linear(
 
         for name, lin in targets:
             lin_gpu = lin.to("cuda")
-            q_linear = QuantLinear(lin_gpu, w_bit, a_bit, group_size=group_size, use_zero_point=use_zero_point, mode=q_config["mode"])
+            q_linear = QuantLinear(
+                lin_gpu,
+                w_bit,
+                a_bit,
+                group_size=group_size,
+                use_zero_point=use_zero_point,
+                mode=q_config["mode"],
+                use_triton=use_triton,
+            )
 
             set_op_by_name(layer, name, q_linear)
 
