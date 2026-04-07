@@ -11,6 +11,11 @@ from transformers.models.bert.modeling_bert import BertForSequenceClassification
 from transformers.models.mistral.modeling_mistral import MistralForCausalLM
 from transformers.models.qwen2.modeling_qwen2 import Qwen2ForCausalLM
 from transformers.models.falcon.modeling_falcon import FalconForCausalLM
+try:
+    from transformers.models.qwen3.modeling_qwen3 import Qwen3ForCausalLM
+except Exception:
+    # Keep compatibility with transformers versions that do not include Qwen3.
+    Qwen3ForCausalLM = None
 
 def set_op_by_name(layer, name, new_module):
     parts = name.split('.')
@@ -39,6 +44,8 @@ def get_blocks(model: nn.Module):
     elif isinstance(model, MistralForCausalLM):
         return model.model.layers
     elif isinstance(model, Qwen2ForCausalLM):
+        return model.model.layers
+    elif Qwen3ForCausalLM is not None and isinstance(model, Qwen3ForCausalLM):
         return model.model.layers
     else:
         raise NotImplementedError(type(model))

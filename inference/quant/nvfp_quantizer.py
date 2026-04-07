@@ -15,6 +15,7 @@ class QuantLinear(nn.Module):
         use_zero_point: bool = False,
         mode: str = "pseudo",  # "pseudo" or "real"
         use_triton: bool = False,
+        emulation_m_chunk_size: int = 512,
     ):
         super().__init__()
         assert mode in ("pseudo", "real", "emulation"), "mode must be 'pseudo', 'real' or 'emulation'"
@@ -32,6 +33,7 @@ class QuantLinear(nn.Module):
         self.use_zero_point = use_zero_point
         self.mode = mode
         self.use_triton = use_triton
+        self.emulation_m_chunk_size = int(emulation_m_chunk_size)
         self._nvfp_ops = None
         self._quant_ops = None
 
@@ -64,7 +66,8 @@ class QuantLinear(nn.Module):
                 )
                 if self.mode == "emulation":
                     self.emulation_kernel = EmulationKernel.for_rtx_5090(
-                        use_triton=self.use_triton
+                        use_triton=self.use_triton,
+                        m_chunk_size=self.emulation_m_chunk_size,
                     )
 
                 self.register_buffer("w_fp4", w_fp4)
@@ -85,8 +88,18 @@ class QuantLinear(nn.Module):
         use_zero_point=False,
         mode="pseudo",
         use_triton=False,
+        emulation_m_chunk_size=512,
     ):
-        return cls(lin, w_bit, a_bit, group_size, use_zero_point, mode, use_triton)
+        return cls(
+            lin,
+            w_bit,
+            a_bit,
+            group_size,
+            use_zero_point,
+            mode,
+            use_triton,
+            emulation_m_chunk_size,
+        )
 
     def forward(self, x):
         original_shape_prefix = x.shape[:-1]
