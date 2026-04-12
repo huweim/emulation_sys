@@ -29,6 +29,7 @@ def get_named_linears(module: nn.Module):
     return {name: m for name, m in module.named_modules() if isinstance(m, nn.Linear)}
 
 def get_blocks(model: nn.Module):
+    class_name = type(model).__name__
     if isinstance(model, LlamaForCausalLM):
         return model.model.layers
     elif isinstance(model, OPTForCausalLM):
@@ -46,6 +47,15 @@ def get_blocks(model: nn.Module):
     elif isinstance(model, Qwen2ForCausalLM):
         return model.model.layers
     elif Qwen3ForCausalLM is not None and isinstance(model, Qwen3ForCausalLM):
+        return model.model.layers
+    elif class_name in {
+        "LlamaForCausalLM",
+        "MistralForCausalLM",
+        "Qwen2ForCausalLM",
+        "Qwen3ForCausalLM",
+    } and hasattr(model, "model") and hasattr(model.model, "layers"):
+        # Support local modeling override modules that preserve HF class names
+        # but come from a different Python module than the stock transformers class.
         return model.model.layers
     else:
         raise NotImplementedError(type(model))

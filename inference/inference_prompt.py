@@ -30,12 +30,12 @@ Usage:
 import torch
 import argparse
 import time
-from transformers import AutoTokenizer, AutoModelForCausalLM
 
 from .quant.pre_quant import replace_quant_linear
+from .utils.model_loading import load_tokenizer_and_model
 
 
-def load_model(model_path: str, dtype: torch.dtype):
+def load_model(model_path: str, dtype: torch.dtype, use_local_fp64_override: bool):
     """Load model and tokenizer."""
     device = "cuda" if torch.cuda.is_available() else "cpu"
     if device == "cpu":
@@ -44,17 +44,21 @@ def load_model(model_path: str, dtype: torch.dtype):
     print(f"[Load] Loading model from {model_path}...")
     print(f"[Load] Device: {device}, Dtype: {dtype}")
     
-    tokenizer = AutoTokenizer.from_pretrained(model_path)
-    model = AutoModelForCausalLM.from_pretrained(
+    tokenizer, model, used_override_path = load_tokenizer_and_model(
         model_path,
-        torch_dtype=dtype,
-        device_map="auto"
+        dtype,
+        attn_implementation="eager",
+        use_local_fp64_override=use_local_fp64_override,
+        require_local_fp64_override=use_local_fp64_override,
     )
     model.to(device)
     model.eval()
     
     print(f"[Load] Model loaded successfully!")
-    return model, tokenizer, device
+    print("[Attention] attn_implementation=eager")
+    if used_override_path:
+        print(f"[Override] Using local modeling override: {used_override_path}")
+    return model, tokenizer, device, used_override_path
 
 
 def generate_text(model, tokenizer, device, prompt: str, max_new_tokens: int, temperature: float = 0.0):
@@ -146,7 +150,11 @@ Examples:
         action="store_true",
         help="Use Triton-accelerated emulation path when --quant-mode emulation",
     )
-    
+    parser.add_argument(
+        "--fp64-override",
+        action="store_true",
+        help="Load the local FP64 modeling override from ./inference/models",
+    )
     args = parser.parse_args()
     
     # Set seed
@@ -161,7 +169,12 @@ Examples:
     model_dtype = dtype_map[args.dtype]
     
     # Load model
-    model, tokenizer, device = load_model(args.model_path, model_dtype)
+    use_local_fp64_override = bool(args.fp64_override)
+    model, tokenizer, device, used_override_path = load_model(
+        args.model_path,
+        model_dtype,
+        use_local_fp64_override=use_local_fp64_override,
+    )
     
     # Apply quantization if requested
     if args.quant_mode:
@@ -201,6 +214,8 @@ Examples:
     print(f"  Max new tokens: {args.max_new_tokens}")
     print(f"  Temperature: {args.temperature}")
     print(f"  Quantization: {args.quant_mode if args.quant_mode else 'None'}")
+    print(f"  FP64 override: {args.fp64_override}")
+    print(f"  Local override: {used_override_path if used_override_path else 'None'}")
     print("=" * 60 + "\n")
     
     # Generate

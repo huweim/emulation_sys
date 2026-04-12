@@ -19,6 +19,7 @@ from .eval.lighteval_runner_hf import run_lighteval_evaluation
 from .eval.lmeval_runner import run_lm_eval
 from inference.eval.prompt_runner import run_determinism_test
 from .eval.inference import main as lighteval_main
+from .utils.model_loading import load_tokenizer_and_model
 
 from .models.qwen_vllm.qwen_mxfp import Qwen2ForCausalLM_nvfp
 
@@ -26,23 +27,22 @@ from vllm import ModelRegistry
 ModelRegistry.register_model("Qwen2ForCausalLM_nvfp", Qwen2ForCausalLM_nvfp)
 
 
-def load_hf_model(model_path: str, dtype: torch.dtype): # Added dtype param
-    from transformers import AutoTokenizer, AutoModelForCausalLM
-
+def load_hf_model(model_path: str, dtype: torch.dtype, use_local_fp64_override: bool):
     torch.manual_seed(42)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     if device == "cpu":
         raise RuntimeError("This script requires a CUDA-enabled GPU.")
 
-    tokenizer = AutoTokenizer.from_pretrained(model_path)
-    model = AutoModelForCausalLM.from_pretrained(
+    tokenizer, model, used_override_path = load_tokenizer_and_model(
         model_path,
-        torch_dtype=dtype, # Use the passed dtype
-        device_map="auto"
+        dtype,
+        attn_implementation="eager",
+        use_local_fp64_override=use_local_fp64_override,
+        require_local_fp64_override=use_local_fp64_override,
     )
     model.to(device)
     model.eval()
-    return model, tokenizer
+    return model, tokenizer, used_override_path
 
 
 def main():
@@ -89,7 +89,8 @@ def main():
     parser.add_argument("--fp8", action="store_true", help="use fp8 quant")
     parser.add_argument("--use-triton-emu", action="store_true",
                         help="Use Triton-accelerated emulation path (HF backend)")
-
+    parser.add_argument("--fp64-override", action="store_true",
+                        help="Load the local FP64 modeling override from ./inference/models")
     args = parser.parse_args()
 
     # --- 1) Load model and tokenizer ---
@@ -99,7 +100,15 @@ def main():
     if load_model_needed:
         print(f"[Main] Loading HF model into memory for {args.backend} backend...")
         model_dtype = torch.bfloat16 if args.dtype == 'bf16' else (torch.float16 if args.dtype == 'fp16' else torch.float32)
-        model, tokenizer = load_hf_model(args.model_path, model_dtype)
+        use_local_fp64_override = bool(args.fp64_override)
+        model, tokenizer, used_override_path = load_hf_model(
+            args.model_path,
+            model_dtype,
+            use_local_fp64_override=use_local_fp64_override,
+        )
+        print("[Attention] attn_implementation=eager")
+        if used_override_path:
+            print(f"[Override] Using local modeling override: {used_override_path}")
     else:
         print("[Main] Model loading deferred to vLLM backend.")
 
