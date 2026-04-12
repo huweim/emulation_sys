@@ -42,9 +42,10 @@ class QuantLinear(nn.Module):
             from nvfp import _ops_emulation as _nvfp_ops_emulation
 
             self._nvfp_ops = _nvfp_ops_real
-            self._quant_ops = _nvfp_ops_real
+            # self._quant_ops = _nvfp_ops_real
             # For quant-alignment experiments on real path, uncomment this line:
-            # self._quant_ops = _nvfp_ops_emulation
+            
+            self._quant_ops = _nvfp_ops_emulation
         elif self.mode == "emulation":
             from nvfp import _ops_emulation as _nvfp_ops_emulation
 
