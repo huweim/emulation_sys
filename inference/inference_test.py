@@ -33,10 +33,11 @@ def load_hf_model(model_path: str, dtype: torch.dtype, use_local_fp64_override: 
     if device == "cpu":
         raise RuntimeError("This script requires a CUDA-enabled GPU.")
 
+    effective_attn_implementation = "eager" if use_local_fp64_override else None
     tokenizer, model, used_override_path = load_tokenizer_and_model(
         model_path,
         dtype,
-        attn_implementation="eager",
+        attn_implementation=effective_attn_implementation,
         use_local_fp64_override=use_local_fp64_override,
         require_local_fp64_override=use_local_fp64_override,
     )
@@ -106,7 +107,10 @@ def main():
             model_dtype,
             use_local_fp64_override=use_local_fp64_override,
         )
-        print("[Attention] attn_implementation=eager")
+        attn_impl = getattr(getattr(model, "config", None), "_attn_implementation", "auto")
+        if use_local_fp64_override:
+            print("[Attention] fp64 override enabled -> forcing attn_implementation=eager")
+        print(f"[Attention] attn_implementation={attn_impl}")
         if used_override_path:
             print(f"[Override] Using local modeling override: {used_override_path}")
     else:
